@@ -1,0 +1,35 @@
+# Local development: API plus PostgreSQL.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aadhya
+    ports: ["5432:5432"]
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aadhya"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    ports: ["8000:8000"]
+    environment:
+      ENV: local
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/aadhya
+      JWT_SECRET: local-development-secret-change-in-every-other-environment
+      OTP_DEBUG_ECHO: "true"
+      PAYMENT_PROVIDER: mock
+      CORS_ORIGINS: http://localhost:8081,http://localhost:19006
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./alembic:/app/alembic:ro
+
+volumes:
+  pg_data:
