@@ -9,11 +9,11 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-api-staging.up.railway.app/v1" }
+      "env": { "EXPO_PUBLIC_API_BASE_URL": "aadhya-farmfresh-production.up.railway.app/v1" }
     },
     "production": {
       "android": { "buildType": "app-bundle" },
-      "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-api.up.railway.app/v1" }
+      "env": { "EXPO_PUBLIC_API_BASE_URL": "aadhya-farmfresh-production.up.railway.app/v1" }
     }
   },
   "submit": { "production": {} }

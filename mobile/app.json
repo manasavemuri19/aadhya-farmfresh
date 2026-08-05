@@ -11,19 +11,32 @@
       "resizeMode": "contain",
       "backgroundColor": "#16261D"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.aadhya.farmfresh"
     },
     "android": {
       "package": "com.aadhya.farmfresh",
-      "adaptiveIcon": { "backgroundColor": "#16261D" }
+      "adaptiveIcon": {
+        "backgroundColor": "#16261D"
+      }
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-font"],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font"
+    ],
     "extra": {
       "apiBaseUrl": "http://localhost:8000/v1",
-      "eas": { "projectId": "" }
+      "eas": {
+        "projectId": "1b00b0a2-aeb0-4d97-adb0-344bd89331ae"
+      },
+      "router": {
+        "origin": false
+      }
     }
   }
 }
