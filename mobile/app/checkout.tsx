@@ -270,13 +270,13 @@ const styles = StyleSheet.create({
   totalLabel: { fontSize: size.md },
   totalValue: { fontFamily: font.monoBold, fontSize: size.lg, color: color.ink },
   errorBox: {
-    backgroundColor: color.chilliSoft,
+    backgroundColor: color.discountSoft,
     borderRadius: radius.md,
     padding: space.md,
     gap: space.xs,
   },
-  errorText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.chilli },
-  errorLink: { fontFamily: font.bodyBold, fontSize: size.sm, color: color.chilli },
+  errorText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
+  errorLink: { fontFamily: font.bodyBold, fontSize: size.sm, color: color.discount },
   footer: {
     padding: space.lg,
     borderTopWidth: 1,

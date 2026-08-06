@@ -1,31 +1,39 @@
 /**
- * Design tokens.
+ * Design tokens — matched to the Aadhya prototype.
  *
- * The palette is taken from the shop's own shelf rather than from a generic
- * "fresh food app" template: the deep green of gongura leaves, the cool white
- * of milk (not cream — cream reads as bakery), and the red of Andhra chilli
- * masala reserved strictly for price and urgency.
- *
- * Type does the heavy lifting. Prices and quantities are set in DM Mono so
- * they line up in a column like a weighing-scale readout — the one place this
- * interface allows itself a flourish, and an honest one for a shop that sells
- * by the litre and the kilo.
+ * Palette: a warm beige field (the colour of set curd and khoya), a terracotta
+ * orange as the primary action colour (Andhra chilli, the pickle that gives the
+ * shop half its shelf), and a deep leaf green as the accent for freshness cues —
+ * delivery times, in-stock, savings. Orange leads, green supports, beige holds
+ * it all. Prices stay in mono so they line up like a scale readout.
  */
 
 export const color = {
-  ink: '#16261D',        // headings, primary surfaces
-  inkSoft: '#2E4136',
-  body: '#3D4A42',
-  muted: '#6C7A70',
-  line: '#E2E6DE',
-  surface: '#F7F8F4',    // app background — milk white, cool cast
-  card: '#FFFFFF',
-  chilli: '#C2402F',     // price, discount, destructive
-  chilliSoft: '#FBEDEA',
-  turmeric: '#D99B2E',   // low stock, warnings
-  turmericSoft: '#FDF4E4',
-  leaf: '#2F7A52',       // success, in-stock, delivered
-  leafSoft: '#EAF4EE',
+  // Surfaces
+  surface: '#F4EDE0',    // app background — warm beige
+  surfaceAlt: '#EFE6D6', // image placeholder wells, pressed states
+  card: '#FFFDF9',       // cards — warm white, not clinical white
+
+  // Ink
+  ink: '#2C2013',        // headings — dark roasted brown, not black
+  body: '#5A4C3C',       // body text
+  muted: '#9A8B78',      // captions, secondary
+  line: '#E6DAC7',       // hairlines, borders
+
+  // Primary — terracotta orange
+  primary: '#D9642C',       // buttons, active states, price
+  primaryPressed: '#BF521F',
+  primarySoft: '#F7E4D6',   // tinted backgrounds
+  onPrimary: '#FFFFFF',
+
+  // Accent — leaf green
+  leaf: '#4A7A43',       // delivery time, in-stock, success
+  leafSoft: '#E6EFE0',
+
+  // Signal
+  discount: '#C2402F',   // discount badge (deep chilli red)
+  discountSoft: '#FBEDEA',
+  lowStock: '#C67A1E',   // low-stock warning (turmeric)
   white: '#FFFFFF',
 } as const;
 
@@ -35,8 +43,7 @@ export const font = {
   body: 'DMSans_400Regular',
   bodyMedium: 'DMSans_500Medium',
   bodyBold: 'DMSans_700Bold',
-  // DM Mono ships only 300/400/500 — there is no 700 weight. Medium is the
-  // heaviest available, so it plays the 'bold' role for numerals.
+  // DM Mono ships 300/400/500 only — 500 is its heaviest, used as the "bold".
   mono: 'DMMono_400Regular',
   monoBold: 'DMMono_500Medium',
 } as const;
@@ -48,7 +55,7 @@ export const size = {
   md: 17,
   lg: 20,
   xl: 26,
-  xxl: 32,
+  xxl: 34,
 } as const;
 
 export const space = {
@@ -61,19 +68,18 @@ export const space = {
 } as const;
 
 export const radius = {
-  sm: 6,
-  md: 10,
-  lg: 14,
+  sm: 8,
+  md: 12,
+  lg: 16,
   pill: 999,
 } as const;
 
-/** One elevation, used sparingly. Stacked shadows read as generic. */
 export const shadow = {
   card: {
-    shadowColor: '#16261D',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 2 },
+    shadowColor: '#2C2013',
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
 } as const;

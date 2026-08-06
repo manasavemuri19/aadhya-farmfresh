@@ -3,13 +3,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 
-import { Text } from '../../src/components/Text';
-import { EmptyState, ErrorState, Loading } from '../../src/components/Feedback';
-import { ordersApi } from '../../src/api/endpoints';
-import { useSession } from '../../src/store/session';
-import { formatPaise } from '../../src/lib/money';
-import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { OrderStatus, OrderView } from '../../src/api/types';
+import { Text } from '../src/components/Text';
+import { EmptyState, ErrorState, Loading } from '../src/components/Feedback';
+import { ordersApi } from '../src/api/endpoints';
+import { useSession } from '../src/store/session';
+import { formatPaise } from '../src/lib/money';
+import { color, font, radius, size, space } from '../src/theme/tokens';
+import type { OrderStatus, OrderView } from '../src/api/types';
 
 const LABEL: Record<OrderStatus, string> = {
   pending_payment: 'Awaiting payment',
@@ -59,7 +59,7 @@ export default function OrdersScreen() {
         title="No orders yet"
         message="Once you order, you can track it here."
         actionLabel="Start shopping"
-        onAction={() => router.replace('/(tabs)')}
+        onAction={() => router.replace('/')}
       />
     );
   }

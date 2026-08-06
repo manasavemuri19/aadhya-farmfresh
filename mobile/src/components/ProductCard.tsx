@@ -9,25 +9,18 @@ import { formatPaise } from '../lib/money';
 import { useCart } from '../store/cart';
 import type { ProductView } from '../api/types';
 
-interface Props {
-  product: ProductView;
-}
-
-export function ProductCard({ product }: Props) {
+export function ProductCard({ product }: { product: ProductView }) {
   const items = useCart((s) => s.items);
   const add = useCart((s) => s.add);
   const setQty = useCart((s) => s.setQty);
 
-  // Default to the first variant that can actually be bought, so a customer
-  // never lands on a sold-out size and assumes the product is unavailable.
   const defaultSku = useMemo(
     () => product.variants.find((v) => v.in_stock)?.sku ?? product.variants[0]?.sku ?? '',
     [product.variants],
   );
   const [selectedSku, setSelectedSku] = useState(defaultSku);
 
-  const variant =
-    product.variants.find((v) => v.sku === selectedSku) ?? product.variants[0];
+  const variant = product.variants.find((v) => v.sku === selectedSku) ?? product.variants[0];
   if (!variant) return null;
 
   const inCart = items[variant.sku]?.qty ?? 0;
@@ -36,11 +29,7 @@ export function ProductCard({ product }: Props) {
     <View style={styles.card}>
       <View style={styles.imageWrap}>
         {product.image_url ? (
-          <Image
-            source={{ uri: product.image_url }}
-            style={styles.image}
-            accessibilityIgnoresInvertColors
-          />
+          <Image source={{ uri: product.image_url }} style={styles.image} accessibilityIgnoresInvertColors />
         ) : (
           <View style={[styles.image, styles.imageFallback]} />
         )}
@@ -52,22 +41,11 @@ export function ProductCard({ product }: Props) {
       </View>
 
       <View style={styles.body}>
-        <Text variant="title" numberOfLines={2} style={styles.name}>
-          {product.name}
-        </Text>
-        <Text variant="caption" numberOfLines={2} style={styles.description}>
-          {product.description}
-        </Text>
+        <Text variant="title" numberOfLines={2} style={styles.name}>{product.name}</Text>
+        <Text variant="caption" numberOfLines={2} style={styles.description}>{product.description}</Text>
+        <Text variant="caption" style={styles.eta}>{product.prep_minutes} min delivery</Text>
 
-        <Text variant="caption" style={styles.eta}>
-          {product.prep_minutes} min
-        </Text>
-
-        <VariantPicker
-          variants={product.variants}
-          selectedSku={variant.sku}
-          onSelect={setSelectedSku}
-        />
+        <VariantPicker variants={product.variants} selectedSku={variant.sku} onSelect={setSelectedSku} />
 
         {variant.low_stock && variant.in_stock && (
           <Text style={styles.lowStock}>Only {variant.max_qty} left today</Text>
@@ -76,9 +54,7 @@ export function ProductCard({ product }: Props) {
         <View style={styles.footer}>
           <View style={styles.priceBlock}>
             <Text variant="price">{formatPaise(variant.price_paise)}</Text>
-            {variant.mrp_paise ? (
-              <Text style={styles.mrp}>{formatPaise(variant.mrp_paise)}</Text>
-            ) : null}
+            {variant.mrp_paise ? <Text style={styles.mrp}>{formatPaise(variant.mrp_paise)}</Text> : null}
           </View>
 
           {!variant.in_stock ? (
@@ -126,13 +102,13 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   imageWrap: { position: 'relative' },
-  image: { width: '100%', height: 140, backgroundColor: color.surface },
+  image: { width: '100%', height: 150, backgroundColor: color.surfaceAlt },
   imageFallback: { backgroundColor: color.leafSoft },
   discount: {
     position: 'absolute',
     top: space.sm,
     left: space.sm,
-    backgroundColor: color.chilli,
+    backgroundColor: color.discount,
     paddingHorizontal: space.sm,
     paddingVertical: 3,
     borderRadius: radius.sm,
@@ -142,7 +118,7 @@ const styles = StyleSheet.create({
   name: { fontSize: size.md },
   description: { minHeight: 30 },
   eta: { color: color.leaf, fontFamily: font.bodyMedium },
-  lowStock: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.turmeric },
+  lowStock: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.lowStock },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -151,18 +127,8 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   priceBlock: { flexDirection: 'row', alignItems: 'baseline', gap: space.xs, flexShrink: 1 },
-  mrp: {
-    fontFamily: font.mono,
-    fontSize: size.sm,
-    color: color.muted,
-    textDecorationLine: 'line-through',
-  },
-  addButton: { minHeight: 34, paddingHorizontal: space.lg },
-  soldOut: {
-    paddingHorizontal: space.md,
-    paddingVertical: 8,
-    borderRadius: radius.sm,
-    backgroundColor: color.surface,
-  },
+  mrp: { fontFamily: font.mono, fontSize: size.sm, color: color.muted, textDecorationLine: 'line-through' },
+  addButton: { minHeight: 38, paddingHorizontal: space.xl },
+  soldOut: { paddingHorizontal: space.md, paddingVertical: 9, borderRadius: radius.sm, backgroundColor: color.surfaceAlt },
   soldOutText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.muted },
 });

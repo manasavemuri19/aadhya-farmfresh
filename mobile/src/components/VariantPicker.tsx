@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet } from 'react-native';
 import { Text } from './Text';
 import { color, font, radius, size, space } from '../theme/tokens';
 import type { VariantView } from '../api/types';
@@ -9,16 +9,6 @@ interface Props {
   onSelect: (sku: string) => void;
 }
 
-/**
- * The size selector.
- *
- * This is the app's signature control, and it earns the attention: a dairy is
- * a shop where the *quantity* is the product decision — 500 ml or 5 litres is
- * a different purchase, not a different option. So the sizes are laid out as a
- * row of weights, mono-set, sold-out ones struck through rather than hidden,
- * because a customer looking for the 5 litre can should see that it exists and
- * has run out today.
- */
 export function VariantPicker({ variants, selectedSku, onSelect }: Props) {
   return (
     <ScrollView
@@ -37,9 +27,7 @@ export function VariantPicker({ variants, selectedSku, onSelect }: Props) {
             disabled={unavailable}
             accessibilityRole="radio"
             accessibilityState={{ selected, disabled: unavailable }}
-            accessibilityLabel={
-              unavailable ? `${variant.label}, sold out` : variant.label
-            }
+            accessibilityLabel={unavailable ? `${variant.label}, sold out` : variant.label}
             style={[
               styles.chip,
               selected && styles.chipSelected,
@@ -66,15 +54,16 @@ const styles = StyleSheet.create({
   row: { gap: space.sm, paddingVertical: space.xs },
   chip: {
     paddingHorizontal: space.md,
-    paddingVertical: 7,
+    height: 40,
+    justifyContent: 'center',
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.line,
     backgroundColor: color.card,
   },
-  chipSelected: { borderColor: color.ink, backgroundColor: color.ink },
-  chipUnavailable: { backgroundColor: color.surface, borderStyle: 'dashed' },
+  chipSelected: { borderColor: color.primary, backgroundColor: color.primary },
+  chipUnavailable: { backgroundColor: color.surfaceAlt, borderStyle: 'dashed' },
   label: { fontFamily: font.mono, fontSize: size.sm, color: color.body },
-  labelSelected: { color: color.white, fontFamily: font.monoBold },
+  labelSelected: { color: color.onPrimary, fontFamily: font.monoBold },
   labelUnavailable: { color: color.muted, textDecorationLine: 'line-through' },
 });

@@ -11,8 +11,6 @@ interface Props {
   label?: string;
 }
 
-/** Sticky basket summary. Hidden entirely when the cart is empty — an empty
- *  bar is chrome that steals a row of products for nothing. */
 export function CartBar({ count, totalPaise, onPress, label = 'View cart' }: Props) {
   const insets = useSafeAreaInsets();
   if (count === 0) return null;
@@ -26,12 +24,8 @@ export function CartBar({ count, totalPaise, onPress, label = 'View cart' }: Pro
         style={({ pressed }) => [styles.bar, pressed && styles.pressed]}
       >
         <View>
-          <Text style={styles.count}>
-            {count} {count === 1 ? 'item' : 'items'}
-          </Text>
-          {totalPaise !== null && (
-            <Text style={styles.total}>{formatPaise(totalPaise)}</Text>
-          )}
+          <Text style={styles.count}>{count} {count === 1 ? 'item' : 'items'}</Text>
+          {totalPaise !== null && <Text style={styles.total}>{formatPaise(totalPaise)}</Text>}
         </View>
         <Text style={styles.cta}>{label} →</Text>
       </Pressable>
@@ -45,10 +39,9 @@ const styles = StyleSheet.create({
     left: 0, right: 0, bottom: 0,
     paddingHorizontal: space.lg,
     paddingTop: space.sm,
-    backgroundColor: 'transparent',
   },
   bar: {
-    backgroundColor: color.ink,
+    backgroundColor: color.primary,
     borderRadius: radius.md,
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
@@ -58,7 +51,7 @@ const styles = StyleSheet.create({
     minHeight: 58,
   },
   pressed: { opacity: 0.9 },
-  count: { fontFamily: font.body, fontSize: size.xs, color: '#B9C7BE' },
-  total: { fontFamily: font.monoBold, fontSize: size.md, color: color.white },
-  cta: { fontFamily: font.bodyBold, fontSize: size.base, color: color.white },
+  count: { fontFamily: font.body, fontSize: size.xs, color: '#F7E4D6' },
+  total: { fontFamily: font.monoBold, fontSize: size.md, color: color.onPrimary },
+  cta: { fontFamily: font.bodyBold, fontSize: size.base, color: color.onPrimary },
 });

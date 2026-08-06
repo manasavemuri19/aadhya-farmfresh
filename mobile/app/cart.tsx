@@ -47,7 +47,7 @@ export default function CartScreen() {
         title="Your cart is empty"
         message="Milk, paneer, ghee and pickles are waiting on the shelf."
         actionLabel="Start shopping"
-        onAction={() => router.replace('/(tabs)')}
+        onAction={() => router.replace('/')}
       />
     );
   }
@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
   thumbFallback: { backgroundColor: color.leafSoft },
   rowBody: { flex: 1, gap: 2 },
   rowEnd: { alignItems: 'flex-end', gap: space.sm },
-  warning: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.turmeric },
+  warning: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.lowStock },
   summary: {
     backgroundColor: color.card,
     borderRadius: radius.md,

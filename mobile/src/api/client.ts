@@ -16,6 +16,11 @@ import Constants from 'expo-constants';
 import type { ApiErrorBody, TokenPair } from './types';
 import { tokenStore } from '../store/tokenStore';
 
+// Only reached if both EXPO_PUBLIC_API_BASE_URL (bundler inlining) and
+// Constants.expoConfig.extra.apiBaseUrl (app.config.js, set at build time)
+// are somehow both absent. That combination should never happen in a real
+// build — this exists purely so a broken config fails with an obviously-bad
+// URL in the error message, not a silent, confusing "no connection".
 const FALLBACK_BASE_URL = 'https://api-base-url-not-set.invalid/v1';
 const TIMEOUT_MS = 15_000;
 

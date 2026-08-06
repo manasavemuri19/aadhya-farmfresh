@@ -156,7 +156,7 @@ export default function OrderScreen() {
       <Button
         label="Back to shop"
         variant="ghost"
-        onPress={() => router.replace('/(tabs)')}
+        onPress={() => router.replace('/')}
       />
     </ScrollView>
   );
@@ -188,5 +188,5 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: color.line, marginVertical: space.xs },
   totalLabel: { fontSize: size.md },
   totalValue: { fontFamily: font.monoBold, fontSize: size.md, color: color.ink },
-  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.chilli },
+  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
 });

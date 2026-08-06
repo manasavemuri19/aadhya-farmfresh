@@ -34,10 +34,10 @@ export function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={variant === 'primary' ? color.white : color.ink} />
+        <ActivityIndicator color={variant === 'primary' ? color.onPrimary : color.primary} />
       ) : (
         <View>
-          <Text style={[styles.label, variant === 'primary' ? styles.labelOnDark : null]}>
+          <Text style={[styles.label, variant === 'primary' ? styles.labelOnPrimary : null]}>
             {label}
           </Text>
         </View>
@@ -48,17 +48,17 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 52,               // comfortably above the 44pt touch minimum
+    minHeight: 52,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space.lg,
   },
-  primary: { backgroundColor: color.ink },
-  secondary: { backgroundColor: color.card, borderWidth: 1, borderColor: color.line },
+  primary: { backgroundColor: color.primary },
+  secondary: { backgroundColor: color.card, borderWidth: 1.5, borderColor: color.primary },
   ghost: { backgroundColor: 'transparent' },
   pressed: { opacity: 0.85 },
   disabled: { opacity: 0.4 },
-  label: { fontFamily: font.bodyBold, fontSize: size.base, color: color.ink },
-  labelOnDark: { color: color.white },
+  label: { fontFamily: font.bodyBold, fontSize: size.base, color: color.primary },
+  labelOnPrimary: { color: color.onPrimary },
 });

@@ -85,5 +85,5 @@ const styles = StyleSheet.create({
   },
   prefix: { fontFamily: font.mono, fontSize: size.md, color: color.muted },
   input: { flex: 1, fontFamily: font.mono, fontSize: size.md, color: color.ink },
-  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.chilli },
+  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
 });

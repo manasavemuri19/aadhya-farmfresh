@@ -36,16 +36,23 @@ export function CategoryRail({ categories, selected, onSelect }: Props) {
 }
 
 const styles = StyleSheet.create({
-  row: { gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm },
-  tab: {
-    paddingHorizontal: space.md,
+  // Generous vertical padding so nothing clips, and the row sits in normal flow.
+  row: {
+    gap: space.sm,
+    paddingHorizontal: space.lg,
     paddingVertical: space.sm,
+    alignItems: 'center',
+  },
+  tab: {
+    paddingHorizontal: space.lg,
+    height: 40,
+    justifyContent: 'center',
     borderRadius: radius.pill,
     backgroundColor: color.card,
     borderWidth: 1,
     borderColor: color.line,
   },
-  tabActive: { backgroundColor: color.ink, borderColor: color.ink },
+  tabActive: { backgroundColor: color.primary, borderColor: color.primary },
   label: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.body },
-  labelActive: { color: color.white, fontFamily: font.bodyBold },
+  labelActive: { color: color.onPrimary, fontFamily: font.bodyBold },
 });

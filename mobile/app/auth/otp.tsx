@@ -88,5 +88,5 @@ const styles = StyleSheet.create({
     letterSpacing: 8,
     color: color.ink,
   },
-  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.chilli },
+  error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
 });

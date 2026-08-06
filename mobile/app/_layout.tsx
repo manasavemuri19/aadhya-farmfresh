@@ -18,16 +18,11 @@ void SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Availability moves fast; a 30s window matches the server's cache hint.
       staleTime: 30_000,
       retry: (failureCount, error) =>
         error instanceof ApiError ? error.isRetryable && failureCount < 2 : failureCount < 2,
     },
-    mutations: {
-      // Never auto-retry a mutation. Order creation is protected by an
-      // idempotency key; everything else could double-apply.
-      retry: false,
-    },
+    mutations: { retry: false },
   },
 });
 
@@ -39,13 +34,8 @@ export default function RootLayout() {
     DMMono_400Regular, DMMono_500Medium,
   });
 
+  useEffect(() => { void restore(); }, [restore]);
   useEffect(() => {
-    void restore();
-  }, [restore]);
-
-  useEffect(() => {
-    // Hide the splash even if a font fails — a missing typeface should degrade
-    // to the system font, not leave the customer staring at a splash screen.
     if (fontsLoaded || fontError) void SplashScreen.hideAsync();
   }, [fontsLoaded, fontError]);
 
@@ -64,14 +54,13 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: color.surface },
           }}
         >
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="cart" options={{ title: 'Your cart' }} />
           <Stack.Screen name="checkout" options={{ title: 'Checkout' }} />
+          <Stack.Screen name="orders" options={{ title: 'My orders' }} />
+          <Stack.Screen name="profile" options={{ title: 'Profile' }} />
           <Stack.Screen name="order/[id]" options={{ title: 'Order' }} />
-          <Stack.Screen
-            name="auth/phone"
-            options={{ title: 'Sign in', presentation: 'modal' }}
-          />
+          <Stack.Screen name="auth/phone" options={{ title: 'Sign in', presentation: 'modal' }} />
           <Stack.Screen name="auth/otp" options={{ title: 'Verify' }} />
         </Stack>
       </SafeAreaProvider>

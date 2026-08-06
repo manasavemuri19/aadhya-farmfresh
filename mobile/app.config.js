@@ -1,4 +1,20 @@
-
+/**
+ * Dynamic config, not static app.json.
+ *
+ * This exists for one reason: `Constants.expoConfig.extra` needs to carry the
+ * correct API URL for *this specific build profile* (development / preview /
+ * production), and that can only happen if it's computed here, at config-eval
+ * time on the EAS build server — where eas.json's per-profile `env` block is
+ * guaranteed to already be set in `process.env`.
+ *
+ * The alternative — relying only on Metro inlining `process.env.EXPO_PUBLIC_*`
+ * into the JS bundle — has a fallback path (client.ts) that silently drops to
+ * `localhost`, which resolves to the phone itself and fails with a generic,
+ * hard-to-diagnose "no connection" on every screen. Setting `extra.apiBaseUrl`
+ * here removes that failure mode entirely: both places read the same source,
+ * so they cannot diverge, and this one doesn't depend on the bundler doing the
+ * substitution correctly.
+ */
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ??
