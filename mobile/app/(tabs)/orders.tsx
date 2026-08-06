@@ -9,7 +9,7 @@ import { ordersApi } from '../../src/api/endpoints';
 import { useSession } from '../../src/store/session';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { OrderStatus } from '../../src/api/types';
+import type { OrderStatus, OrderView } from '../../src/api/types';
 
 const LABEL: Record<OrderStatus, string> = {
   pending_payment: 'Awaiting payment',
@@ -73,7 +73,7 @@ export default function OrdersScreen() {
       ListHeaderComponent={<Text variant="display" style={styles.heading}>Orders</Text>}
       refreshing={orders.isRefetching}
       onRefresh={() => void orders.refetch()}
-      renderItem={({ item }) => (
+      renderItem={({ item }: { item: OrderView }) => (
         <Pressable
           onPress={() => router.push(`/order/${item.id}`)}
           accessibilityRole="button"

@@ -12,6 +12,7 @@ import { useSession } from '../src/store/session';
 import { cartApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
+import type { Quote } from '../src/api/types';
 
 export default function CartScreen() {
   const router = useRouter();
@@ -61,13 +62,13 @@ export default function CartScreen() {
     );
   }
 
-  const data = quote.data;
+  const data: Quote = quote.data;
   const shortfall = data.free_delivery_threshold_paise - data.subtotal_paise;
 
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.list}>
-        {data.lines.map((line) => (
+        {data.lines.map((line: Quote['lines'][number]) => (
           <View key={line.sku} style={styles.row}>
             {line.image_url ? (
               <Image source={{ uri: line.image_url }} style={styles.thumb} />

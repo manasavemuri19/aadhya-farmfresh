@@ -29,7 +29,7 @@ export default function ShopScreen() {
   // category should be instant rather than a network round trip.
   const products = useMemo<ProductView[]>(() => {
     const all = catalog.data?.products ?? [];
-    return category === 'all' ? all : all.filter((p) => p.category === category);
+    return category === 'all' ? all : all.filter((p: ProductView) => p.category === category);
   }, [catalog.data, category]);
 
   const count = cartCount(items);

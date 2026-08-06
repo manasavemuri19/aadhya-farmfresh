@@ -8,7 +8,7 @@ import { ErrorState, Loading } from '../../src/components/Feedback';
 import { ordersApi } from '../../src/api/endpoints';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { OrderStatus } from '../../src/api/types';
+import type { OrderStatus, OrderView } from '../../src/api/types';
 
 const STEPS: { status: OrderStatus; label: string }[] = [
   { status: 'confirmed', label: 'Confirmed' },
@@ -63,7 +63,7 @@ export default function OrderScreen() {
     );
   }
 
-  const data = order.data;
+  const data: OrderView = order.data;
   const currentStep = STEPS.findIndex((s) => s.status === data.status);
   const stopped = data.status === 'cancelled' || data.status === 'refunded';
 
@@ -97,7 +97,7 @@ export default function OrderScreen() {
 
       <View style={styles.card}>
         <Text variant="label" style={styles.cardTitle}>Items</Text>
-        {data.lines.map((line) => (
+        {data.lines.map((line: OrderView['lines'][number]) => (
           <View key={line.sku} style={styles.line}>
             <View style={styles.lineBody}>
               <Text variant="body" numberOfLines={1}>{line.product_name}</Text>
