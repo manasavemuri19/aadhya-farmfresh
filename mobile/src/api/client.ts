@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import type { ApiErrorBody, TokenPair } from './types';
 import { tokenStore } from '../store/tokenStore';
 
-const FALLBACK_BASE_URL = 'http://localhost:8000/v1';
+const FALLBACK_BASE_URL = 'https://api-base-url-not-set.invalid/v1';
 const TIMEOUT_MS = 15_000;
 
 export const API_BASE_URL: string =
