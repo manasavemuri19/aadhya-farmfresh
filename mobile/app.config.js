@@ -46,6 +46,12 @@ module.exports = {
       adaptiveIcon: { backgroundColor: '#16261D' },
     },
     plugins: ['expo-router', 'expo-secure-store', 'expo-font'],
+    updates: {
+      url: 'https://u.expo.dev/1b00b0a2-aeb0-4d97-adb0-344bd89331ae',
+    },
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
     extra: {
       apiBaseUrl: API_BASE_URL,
       eas: { projectId: '1b00b0a2-aeb0-4d97-adb0-344bd89331ae' },
