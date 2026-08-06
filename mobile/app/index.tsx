@@ -67,7 +67,7 @@ export default function ShopScreen() {
           <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
             <View style={styles.titleRow}>
               <View style={styles.titleBlock}>
-                <Text variant="display" style={styles.wordmark}>Aadhya</Text>
+                <Text variant="display" style={styles.wordmark}>Aadya</Text>
                 <Text variant="caption" style={styles.tagline}>Pickles &amp; Dairy · 20–45 min</Text>
               </View>
               <Pressable

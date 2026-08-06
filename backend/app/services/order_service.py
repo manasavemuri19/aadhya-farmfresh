@@ -42,7 +42,6 @@ from app.core.errors import (
     NotFound,
     OutOfStock,
     PriceChanged,
-    ValidationError,
 )
 from app.core.ids import human_order_number, new_order_id, new_payment_id
 from app.domain.enums import OrderStatus, PaymentMethod, PaymentStatus
@@ -191,12 +190,6 @@ class OrderService:
                         if line.adjusted_from_qty is not None or line.unavailable_reason
                     ]
                 },
-            )
-        if not cart.meets_minimum:
-            raise ValidationError(
-                f"Add a little more — the minimum order is "
-                f"Rs {settings.min_order_paise // 100}.",
-                details={"min_order_paise": settings.min_order_paise},
             )
         if (
             request.expected_total_paise is not None

@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db.models import Variant as VariantRow
-from app.core.errors import Conflict, OutOfStock, PriceChanged, ValidationError
+from app.core.errors import Conflict, OutOfStock, PriceChanged
 from app.domain.enums import OrderStatus, PaymentMethod, PaymentStatus
 from app.payments.base import WebhookEvent
 from app.schemas.auth import Address
@@ -79,13 +79,15 @@ async def test_online_order_waits_for_payment(order_service, user, milk):
     assert order.payment.checkout_payload is not None
 
 
-async def test_order_below_minimum_is_rejected(order_service, user, milk):
-    with pytest.raises(ValidationError):
-        await order_service.create_order(
-            user_id=user["id"],
-            request=order_request([("MILK-COW-1L", 1)]),  # Rs 35, under the Rs 99 floor
-            idempotency_key=None,
-        )
+async def test_small_order_is_accepted(order_service, user, milk):
+    """There is no minimum order — a single litre of milk must check out fine."""
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key=None,
+    )
+    assert order.status is OrderStatus.CONFIRMED
+    assert order.subtotal_paise == 3500
 
 
 async def test_ordering_more_than_stock_is_rejected_and_releases_nothing(

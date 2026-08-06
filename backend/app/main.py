@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Aadhya Pickles & Dairy API",
+    title="Aadya Pickles & Dairy API",
     version="1.0.0",
     lifespan=lifespan,
     # Interactive docs are useful in development and an information leak in prod.

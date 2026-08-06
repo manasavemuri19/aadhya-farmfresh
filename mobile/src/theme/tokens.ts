@@ -1,5 +1,5 @@
 /**
- * Design tokens — matched to the Aadhya prototype.
+ * Design tokens — matched to the Aadya prototype.
  *
  * Palette: a warm beige field (the colour of set curd and khoya), a terracotta
  * orange as the primary action colour (Andhra chilli, the pickle that gives the

@@ -25,16 +25,18 @@ const API_BASE_URL =
 
 module.exports = {
   expo: {
-    name: 'Aadhya Pickles & Dairy',
+    name: 'Aadya',
     slug: 'aadhya-farmfresh',
     scheme: 'aadhya',
     version: '1.0.0',
     orientation: 'portrait',
     userInterfaceStyle: 'light',
     newArchEnabled: false,
+    icon: './assets/icon.png',
     splash: {
+      image: './assets/splash-logo.png',
       resizeMode: 'contain',
-      backgroundColor: '#16261D',
+      backgroundColor: '#F4EDE0',
     },
     assetBundlePatterns: ['**/*'],
     ios: {
@@ -43,9 +45,27 @@ module.exports = {
     },
     android: {
       package: 'com.aadhya.farmfresh',
-      adaptiveIcon: { backgroundColor: '#16261D' },
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-icon.png',
+        backgroundColor: '#F4EDE0',
+      },
     },
-    plugins: ['expo-router', 'expo-secure-store', 'expo-font'],
+    web: {
+      favicon: './assets/favicon.png',
+    },
+    plugins: [
+      'expo-router',
+      'expo-secure-store',
+      'expo-font',
+      [
+        'expo-splash-screen',
+        {
+          image: './assets/splash-logo.png',
+          resizeMode: 'contain',
+          backgroundColor: '#F4EDE0',
+        },
+      ],
+    ],
     updates: {
       url: 'https://u.expo.dev/1b00b0a2-aeb0-4d97-adb0-344bd89331ae',
     },

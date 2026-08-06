@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     currency: str = "INR"
     delivery_fee_paise: int = 2900
     free_delivery_threshold_paise: int = 29900
-    min_order_paise: int = 9900
+    min_order_paise: int = 0  # no minimum order; free-delivery threshold still applies
 
     # CORS
     cors_origins: str = "http://localhost:8081,http://localhost:19006"

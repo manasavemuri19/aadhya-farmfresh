@@ -70,7 +70,7 @@ class RazorpayProvider(PaymentProvider):
                 "order_id": order["id"],
                 "amount": amount_paise,
                 "currency": currency,
-                "name": "Aadhya Pickles & Dairy",
+                "name": "Aadya Pickles & Dairy",
                 "description": receipt,
             },
         )

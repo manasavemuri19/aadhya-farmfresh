@@ -72,7 +72,7 @@ export function DrawerMenu({ visible, onClose }: Props) {
           )}
 
           <View style={styles.footer}>
-            <Text variant="caption">Aadhya Pickles &amp; Dairy · Hyderabad</Text>
+            <Text variant="caption">Aadya Pickles &amp; Dairy · Hyderabad</Text>
           </View>
         </Pressable>
       </Pressable>

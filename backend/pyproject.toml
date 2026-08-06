@@ -29,6 +29,9 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
+# Only "app" is the installable package. "alembic" is migration tooling that
+# lives alongside it, not a package to install — without this, setuptools
+# sees two top-level directories and refuses to guess which one you meant.
 include = ["app*"]
 
 [tool.ruff]

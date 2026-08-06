@@ -1,4 +1,4 @@
-"""Seed the catalog with the real Aadhya product list.
+"""Seed the catalog with the real Aadya product list.
 
 Idempotent: re-running updates existing records rather than duplicating them.
 Stock is seeded at a plausible morning quantity so the app is usable straight
@@ -55,6 +55,23 @@ def _v(
     )
 
 
+_IMAGE_BY_SLUG = {
+    "full-cream-cow-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
+    "buffalo-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
+    "toned-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
+    "homestyle-set-curd": "https://aadhya-farmfresh.lovable.app/assets/curd-CRkRFsB0.jpg",
+    "masala-buttermilk": "https://aadhya-farmfresh.lovable.app/assets/buttermilk-DFb_u5qQ.jpg",
+    "fresh-malai-paneer": "https://aadhya-farmfresh.lovable.app/assets/paneer-Bt1Hn5_i.jpg",
+    "pure-khoya-mawa": "https://aadhya-farmfresh.lovable.app/assets/paneer-Bt1Hn5_i.jpg",
+    "bilona-cow-ghee": "https://aadhya-farmfresh.lovable.app/assets/ghee-DOiAAtla.jpg",
+    "fresh-white-butter": "https://aadhya-farmfresh.lovable.app/assets/butter-DD3eSo37.jpg",
+    "avakaya-mango-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
+    "lemon-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
+    "gongura-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
+    "garlic-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
+}
+
+
 def _p(
     slug: str,
     name: str,
@@ -70,7 +87,7 @@ def _p(
         name=name,
         description=description,
         category=category,
-        image_url=f"https://cdn.aadhya.example/products/{slug}.jpg",
+        image_url=_IMAGE_BY_SLUG.get(slug, ""),
         prep_minutes=prep_minutes,
         sort_order=sort_order,
         variants=variants,
