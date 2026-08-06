@@ -32,7 +32,7 @@ module.exports = {
     plugins: ['expo-router', 'expo-secure-store', 'expo-font'],
     extra: {
       apiBaseUrl: API_BASE_URL,
-      eas: { projectId: process.env.EAS_PROJECT_ID ?? '' },
+      eas: { projectId: '1b00b0a2-aeb0-4d97-adb0-344bd89331ae' },
     },
   },
 };
