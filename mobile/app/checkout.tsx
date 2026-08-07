@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,6 +9,8 @@ import { ErrorState, Loading } from '../src/components/Feedback';
 import { cartApi, ordersApi } from '../src/api/endpoints';
 import { ApiError } from '../src/api/client';
 import { cartLines, useCart } from '../src/store/cart';
+import { useSession } from '../src/store/session';
+import { useLocationStore } from '../src/store/location';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { Address, PaymentMethod } from '../src/api/types';
@@ -35,6 +37,43 @@ export default function CheckoutScreen() {
   const [pincode, setPincode] = useState('');
   const [notes, setNotes] = useState('');
   const [method, setMethod] = useState<PaymentMethod>('online');
+  const [prefilled, setPrefilled] = useState(false);
+
+  const user = useSession((s) => s.user);
+  const location = useLocationStore();
+
+  // Fill from a saved profile address first; only reach for device location
+  // if there isn't one, and never overwrite something the person has already
+  // started typing.
+  useEffect(() => {
+    if (prefilled) return;
+    const saved = user?.addresses?.[0];
+    if (saved?.line1) {
+      setLine1(saved.line1);
+      setLandmark(saved.landmark ?? '');
+      setPincode(saved.pincode ?? '');
+      setPrefilled(true);
+    }
+  }, [user, prefilled]);
+
+  const useCurrentLocation = () => {
+    if (location.status === 'found' && location.line1) {
+      setLine1(location.line1);
+      if (location.pincode) setPincode(location.pincode);
+      setPrefilled(true);
+    } else {
+      void location.request();
+    }
+  };
+
+  // If the location finishes fetching after the button was already tapped
+  // once (first tap only requests permission), apply it as soon as it lands.
+  useEffect(() => {
+    if (location.status === 'found' && location.line1 && line1.trim().length === 0) {
+      setLine1(location.line1);
+      if (location.pincode) setPincode(location.pincode);
+    }
+  }, [location.status]);
 
   const lines = useMemo(() => cartLines(items), [items]);
 
@@ -99,6 +138,16 @@ export default function CheckoutScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text variant="title">Where should we deliver?</Text>
+
+        <Pressable
+          onPress={useCurrentLocation}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
+        >
+          <Text style={styles.locationButtonText}>
+            {location.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+          </Text>
+        </Pressable>
 
         <Field
           label="Flat, building and street"
@@ -228,6 +277,17 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { padding: space.lg, gap: space.md, paddingBottom: space.xxl },
   sectionGap: { marginTop: space.md },
+  locationButton: {
+    backgroundColor: color.leafSoft,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.leaf,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    alignItems: 'center',
+  },
+  locationButtonPressed: { opacity: 0.8 },
+  locationButtonText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
   field: { gap: space.xs },
   input: {
     backgroundColor: color.card,

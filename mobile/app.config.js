@@ -65,6 +65,13 @@ module.exports = {
           backgroundColor: '#F4EDE0',
         },
       ],
+      [
+        'expo-location',
+        {
+          locationAlwaysAndWhenInUsePermission:
+            'Aadya uses your location to find the right delivery address and estimate arrival time.',
+        },
+      ],
     ],
     updates: {
       url: 'https://u.expo.dev/1b00b0a2-aeb0-4d97-adb0-344bd89331ae',

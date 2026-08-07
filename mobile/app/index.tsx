@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,7 @@ import { DrawerMenu } from '../src/components/DrawerMenu';
 import { ErrorState, Loading } from '../src/components/Feedback';
 import { catalogApi } from '../src/api/endpoints';
 import { cartCount, useCart } from '../src/store/cart';
+import { useLocationStore } from '../src/store/location';
 import { color, font, size, space } from '../src/theme/tokens';
 import type { ProductView } from '../src/api/types';
 
@@ -23,6 +24,11 @@ export default function ShopScreen() {
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const items = useCart((s) => s.items);
+  const location = useLocationStore();
+
+  useEffect(() => {
+    if (location.status === 'idle') void location.request();
+  }, [location]);
 
   const catalog = useQuery({ queryKey: ['catalog'], queryFn: () => catalogApi.get() });
 
@@ -68,7 +74,32 @@ export default function ShopScreen() {
             <View style={styles.titleRow}>
               <View style={styles.titleBlock}>
                 <Text variant="display" style={styles.wordmark}>Aadya</Text>
-                <Text variant="caption" style={styles.tagline}>Pickles &amp; Dairy · 20–45 min</Text>
+                <Pressable
+                  onPress={() => {
+                    if (location.status === 'denied' || location.status === 'error') {
+                      router.push('/profile');
+                    } else {
+                      void location.request();
+                    }
+                  }}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    location.status === 'found'
+                      ? `Delivering to ${location.label}`
+                      : 'Set delivery location'
+                  }
+                >
+                  <Text variant="caption" style={styles.tagline} numberOfLines={1}>
+                    {location.status === 'found' && location.label
+                      ? `📍 ${location.label} · 20–45 min`
+                      : location.status === 'locating'
+                        ? 'Finding your location…'
+                        : location.status === 'denied'
+                          ? 'Tap to set delivery address'
+                          : 'Pickles & Dairy · 20–45 min'}
+                  </Text>
+                </Pressable>
               </View>
               <Pressable
                 onPress={() => setMenuOpen(true)}
