@@ -54,6 +54,7 @@ app/services/pricing.py
 tests/test_concurrency_real.py
 tests/test_order_flow.py
 tests/test_order_state.py
+tests/test_otp_flow.py
 tests/test_phone_normalisation.py
 tests/test_pricing.py
 tests/test_stock_concurrency.py

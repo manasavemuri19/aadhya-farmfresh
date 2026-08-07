@@ -306,6 +306,9 @@ class OtpChallenge(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Set on first successful match. The row is kept (not deleted) for a short
+    # grace window after that — see verify_and_consume for why.
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class IdempotencyKey(Base):

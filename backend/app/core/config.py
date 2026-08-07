@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_resend_cooldown_seconds: int = 45
+    # How long a just-used correct code stays valid for an identical retry —
+    # covers the client timing out after the server already succeeded.
+    otp_consumed_grace_seconds: int = 120
     otp_debug_echo: bool = False
 
     # Payments

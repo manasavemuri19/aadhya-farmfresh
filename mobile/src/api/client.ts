@@ -22,7 +22,11 @@ import { tokenStore } from '../store/tokenStore';
 // build — this exists purely so a broken config fails with an obviously-bad
 // URL in the error message, not a silent, confusing "no connection".
 const FALLBACK_BASE_URL = 'https://api-base-url-not-set.invalid/v1';
-const TIMEOUT_MS = 15_000;
+// Railway's free tier sleeps the backend when idle; the first request after
+// that has to wait for a cold boot, which can take 30s+. A short timeout here
+// turns that normal wake-up into a scary "took too long" error on the user's
+// very first action. 40s covers a cold start with margin.
+const TIMEOUT_MS = 40_000;
 
 export const API_BASE_URL: string =
   process.env.EXPO_PUBLIC_API_BASE_URL ??

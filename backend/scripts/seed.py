@@ -55,21 +55,14 @@ def _v(
     )
 
 
-_IMAGE_BY_SLUG = {
-    "full-cream-cow-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
-    "buffalo-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
-    "toned-milk": "https://aadhya-farmfresh.lovable.app/assets/milk-DmXrcbmX.jpg",
-    "homestyle-set-curd": "https://aadhya-farmfresh.lovable.app/assets/curd-CRkRFsB0.jpg",
-    "masala-buttermilk": "https://aadhya-farmfresh.lovable.app/assets/buttermilk-DFb_u5qQ.jpg",
-    "fresh-malai-paneer": "https://aadhya-farmfresh.lovable.app/assets/paneer-Bt1Hn5_i.jpg",
-    "pure-khoya-mawa": "https://aadhya-farmfresh.lovable.app/assets/paneer-Bt1Hn5_i.jpg",
-    "bilona-cow-ghee": "https://aadhya-farmfresh.lovable.app/assets/ghee-DOiAAtla.jpg",
-    "fresh-white-butter": "https://aadhya-farmfresh.lovable.app/assets/butter-DD3eSo37.jpg",
-    "avakaya-mango-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
-    "lemon-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
-    "gongura-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
-    "garlic-pickle": "https://aadhya-farmfresh.lovable.app/assets/pickles-_kelEOkU.jpg",
-}
+# The mobile app ships its own bundled product photography and resolves
+# images locally by product name — see mobile/src/lib/productImages.ts. This
+# field is not used by the app right now; it's kept for a future admin panel
+# or web client, and left empty rather than pointing at prototype URLs that
+# were never meant to be a real image host. Populate with real farm photo
+# CDN URLs here once they exist — the app prefers this field over its local
+# bundle automatically when it's non-empty.
+_IMAGE_BY_SLUG: dict[str, str] = {}
 
 
 def _p(

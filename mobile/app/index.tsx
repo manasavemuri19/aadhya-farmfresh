@@ -77,7 +77,11 @@ export default function ShopScreen() {
                 hitSlop={10}
                 style={styles.menuButton}
               >
-                <Text style={styles.menuDots}>⋯</Text>
+                <View style={styles.hamburger}>
+                  <View style={styles.hamburgerBar} />
+                  <View style={styles.hamburgerBar} />
+                  <View style={styles.hamburgerBar} />
+                </View>
               </Pressable>
             </View>
 
@@ -127,7 +131,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.card, borderWidth: 1, borderColor: color.line,
     marginTop: space.xs,
   },
-  menuDots: { fontFamily: font.bodyBold, fontSize: 24, color: color.ink, marginTop: -6 },
+  hamburger: { width: 18, height: 14, justifyContent: 'space-between' },
+  hamburgerBar: { width: 18, height: 2, borderRadius: 1, backgroundColor: color.ink },
   searchWrap: { marginTop: space.md },
   empty: { textAlign: 'center', marginTop: space.xxl },
 });

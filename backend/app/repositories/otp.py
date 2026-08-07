@@ -55,6 +55,22 @@ class OtpRepository:
         return expires_at
 
     async def verify_and_consume(self, phone: str, code: str) -> tuple[bool, str]:
+        """Match a code against the live challenge for this phone.
+
+        A successful match is **not** deleted immediately. If the client's
+        connection drops after the server has already committed success — a
+        slow network, a dropped connection, anything — the client sees a
+        failure and, quite reasonably, retries with the exact same code. Under
+        the old delete-on-success behaviour that retry hit an already-gone row
+        and came back "invalid code", even though the account had genuinely
+        just been signed in. That combination (a scary error, followed by
+        already being signed in on the next launch) was confusing and wrong.
+        Keeping the row and allowing the identical correct code to succeed
+        again within a short grace window makes verification idempotent for
+        that case, the same way a checkout idempotency key does for orders.
+        A *different* code after consumption still fails — this only forgives
+        an exact repeat of the one that already worked.
+        """
         challenge = await self._latest(phone)
         if challenge is None:
             return False, "no_challenge"
@@ -64,6 +80,18 @@ class OtpRepository:
                 delete(OtpChallenge).where(OtpChallenge.phone == phone)
             )
             return False, "expired"
+
+        if challenge.consumed_at is not None:
+            # Already used. Only a replay of the identical code, within the
+            # grace window, is allowed through — anything else is a genuine
+            # failure (including a correct-looking code after the window
+            # closes, which is intentional: grace is for retries, not reuse).
+            grace_expired = (
+                datetime.now(UTC) - _aware(challenge.consumed_at)
+            ) > timedelta(seconds=settings.otp_consumed_grace_seconds)
+            if grace_expired or not verify_secret(challenge.code_hash, code):
+                return False, "no_challenge"
+            return True, "ok"
 
         if challenge.attempts >= settings.otp_max_attempts:
             await self.session.execute(
@@ -76,9 +104,8 @@ class OtpRepository:
             await self.session.flush()
             return False, "mismatch"
 
-        await self.session.execute(
-            delete(OtpChallenge).where(OtpChallenge.phone == phone)
-        )
+        challenge.consumed_at = datetime.now(UTC)
+        await self.session.flush()
         return True, "ok"
 
     async def seconds_until_resend_allowed(self, phone: str) -> int:

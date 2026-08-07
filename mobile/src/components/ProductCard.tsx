@@ -6,6 +6,7 @@ import { QtyStepper } from './QtyStepper';
 import { VariantPicker } from './VariantPicker';
 import { color, font, radius, shadow, size, space } from '../theme/tokens';
 import { formatPaise } from '../lib/money';
+import { productImageSource } from '../lib/productImages';
 import { useCart } from '../store/cart';
 import type { ProductView } from '../api/types';
 
@@ -28,11 +29,11 @@ export function ProductCard({ product }: { product: ProductView }) {
   return (
     <View style={styles.card}>
       <View style={styles.imageWrap}>
-        {product.image_url ? (
-          <Image source={{ uri: product.image_url }} style={styles.image} accessibilityIgnoresInvertColors />
-        ) : (
-          <View style={[styles.image, styles.imageFallback]} />
-        )}
+        <Image
+          source={productImageSource(product.name, product.category, product.image_url)}
+          style={styles.image}
+          accessibilityIgnoresInvertColors
+        />
         {variant.discount_percent > 0 && (
           <View style={styles.discount}>
             <Text style={styles.discountText}>{variant.discount_percent}% off</Text>

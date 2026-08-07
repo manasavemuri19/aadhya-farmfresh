@@ -9,14 +9,18 @@ import { authApi } from '../../src/api/endpoints';
 import { tokenStore } from '../../src/store/tokenStore';
 import { useSession } from '../../src/store/session';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
+import type { Address } from '../../src/api/types';
 
 export default function OtpScreen() {
   const router = useRouter();
-  const { phone, debugCode } = useLocalSearchParams<{ phone: string; debugCode: string }>();
+  const { phone, name, line1, pincode, debugCode, redirectTo } = useLocalSearchParams<{
+    phone: string; name: string; line1: string; pincode: string; debugCode: string;
+    redirectTo: string;
+  }>();
   const setUser = useSession((s) => s.setUser);
   const [code, setCode] = useState('');
 
-  // Convenience for local development only; absent in any real build.
+  // Convenience for local/staging builds only; absent in production.
   useEffect(() => {
     if (debugCode) setCode(debugCode);
   }, [debugCode]);
@@ -25,16 +29,34 @@ export default function OtpScreen() {
     mutationFn: () => authApi.verifyOtp(phone, code),
     onSuccess: async (result) => {
       await tokenStore.save(result.tokens);
-      setUser(result.user);
-      router.replace('/checkout');
+      let profile = result.user;
+
+      // Save what was collected on the previous screen now that we have a
+      // verified session to attach it to. Best-effort: a hiccup here should
+      // never block sign-in — the person can always fill it in from Profile.
+      try {
+        if (name) {
+          profile = await authApi.updateName(name);
+        }
+        if (line1 && /^\d{6}$/.test(pincode ?? '')) {
+          const address: Address = {
+            label: 'Home', line1, line2: '', landmark: '',
+            city: 'Hyderabad', pincode, latitude: null, longitude: null,
+          };
+          await authApi.saveAddress(address);
+          profile = { ...profile, addresses: [address] };
+        }
+      } catch {
+        // Sign-in still succeeds; profile fields are editable later.
+      }
+
+      setUser(profile);
+      router.replace((redirectTo as string) || '/');
     },
   });
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.content}>
         <Text variant="title">Enter the code</Text>
         <Text variant="body">Sent to {phone}</Text>

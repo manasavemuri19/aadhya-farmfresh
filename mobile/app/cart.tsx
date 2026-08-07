@@ -11,6 +11,7 @@ import { cartLines, useCart } from '../src/store/cart';
 import { useSession } from '../src/store/session';
 import { cartApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
+import { productImageSource } from '../src/lib/productImages';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { Quote } from '../src/api/types';
 
@@ -70,11 +71,10 @@ export default function CartScreen() {
       <ScrollView contentContainerStyle={styles.list}>
         {data.lines.map((line: Quote['lines'][number]) => (
           <View key={line.sku} style={styles.row}>
-            {line.image_url ? (
-              <Image source={{ uri: line.image_url }} style={styles.thumb} />
-            ) : (
-              <View style={[styles.thumb, styles.thumbFallback]} />
-            )}
+            <Image
+              source={productImageSource(line.product_name, undefined, line.image_url)}
+              style={styles.thumb}
+            />
 
             <View style={styles.rowBody}>
               <Text variant="label" numberOfLines={1}>{line.product_name}</Text>
@@ -137,7 +137,11 @@ export default function CartScreen() {
           label={status === 'signed_in' ? 'Choose address' : 'Sign in to continue'}
           disabled={!data.meets_minimum}
           onPress={() =>
-            router.push(status === 'signed_in' ? '/checkout' : '/auth/phone')
+            router.push(
+              status === 'signed_in'
+                ? '/checkout'
+                : { pathname: '/auth/phone', params: { redirectTo: '/checkout' } },
+            )
           }
         />
       </View>
