@@ -1,11 +1,15 @@
-__pycache__/
-*.py[cod]
-.venv/
-.env
-.pytest_cache/
-.ruff_cache/
+@"
 node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
 .expo/
 dist/
 *.log
+*.py[cod]
+.env
+.ruff_cache/
 .DS_Store
+"@ | Out-File -Encoding utf8 .gitignore
+backend/*.egg-info/
