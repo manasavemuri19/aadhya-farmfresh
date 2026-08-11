@@ -38,6 +38,7 @@ export function ProductCard({ product }: { product: ProductView }) {
         <Image
           source={productImageSource(product.name, product.category, product.image_url)}
           style={styles.image}
+          resizeMode="cover"
           accessibilityIgnoresInvertColors
         />
         {variant.discount_percent > 0 && (
@@ -104,7 +105,13 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   imageWrap: { position: 'relative' },
-  image: { width: '100%', aspectRatio: 1, backgroundColor: color.surfaceAlt },
+  // A fixed height, not aspectRatio, is deliberate: aspectRatio computed
+  // against a percentage width inside a nested flex grid is a known flaky
+  // spot on Android's renderer — it can measure before the column width is
+  // settled and lock in a wrong (often much taller) result. A fixed height
+  // sidesteps that entirely and is also what gives quick-commerce grids
+  // (Zepto, Blinkit) their uniform tile look regardless of column width.
+  image: { width: '100%', height: 118, backgroundColor: color.surfaceAlt },
   discount: {
     position: 'absolute',
     top: space.xs,
