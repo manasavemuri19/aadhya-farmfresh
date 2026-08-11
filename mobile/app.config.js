@@ -16,12 +16,19 @@
  * substitution correctly.
  */
 
+// IMPORTANT: eas.json's per-profile `env` block is only read by `eas build`.
+// `eas update` bundles locally, using whatever is in the calling shell's
+// environment at that moment — it does NOT read eas.json's build.*.env at
+// all. A person running `eas update` from a plain terminal without that
+// variable set would otherwise silently publish a build pointed at nothing.
+// So the fallback here is the real, current production API — not a
+// deliberately-broken placeholder — because that failure mode has actually
+// happened and cost real debugging time. EXPO_PUBLIC_API_BASE_URL still
+// overrides this whenever it *is* set (e.g. during a real `eas build`,
+// or a local dev server pointed at a different backend).
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ??
-  // Deliberately not `localhost` — a URL that obviously can't resolve makes a
-  // misconfigured build fail loud and fast instead of silently pointing at
-  // the phone's own loopback address.
-  'https://api-base-url-not-set.invalid/v1';
+  'https://aadhya-farmfresh-production.up.railway.app/v1';
 
 module.exports = {
   expo: {

@@ -16,12 +16,15 @@ import Constants from 'expo-constants';
 import type { ApiErrorBody, TokenPair } from './types';
 import { tokenStore } from '../store/tokenStore';
 
-// Only reached if both EXPO_PUBLIC_API_BASE_URL (bundler inlining) and
-// Constants.expoConfig.extra.apiBaseUrl (app.config.js, set at build time)
-// are somehow both absent. That combination should never happen in a real
-// build — this exists purely so a broken config fails with an obviously-bad
-// URL in the error message, not a silent, confusing "no connection".
-const FALLBACK_BASE_URL = 'https://api-base-url-not-set.invalid/v1';
+// Reached if both EXPO_PUBLIC_API_BASE_URL (bundler inlining) and
+// Constants.expoConfig.extra.apiBaseUrl (app.config.js) are absent — which
+// does happen in practice: `eas update` bundles locally using whatever is in
+// the calling shell, and neither of those sources gets set automatically the
+// way eas.json's env block does for `eas build`. This is the real production
+// API, not a placeholder — a deliberately-broken fallback here cost real
+// debugging time once already, for no benefit over just pointing at the
+// backend that actually exists.
+const FALLBACK_BASE_URL = 'https://aadhya-farmfresh-production.up.railway.app/v1';
 // Railway's free tier sleeps the backend when idle; the first request after
 // that has to wait for a cold boot, which can take 30s+. A short timeout here
 // turns that normal wake-up into a scary "took too long" error on the user's
