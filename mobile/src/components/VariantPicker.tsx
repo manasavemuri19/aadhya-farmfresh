@@ -51,10 +51,10 @@ export function VariantPicker({ variants, selectedSku, onSelect }: Props) {
 }
 
 const styles = StyleSheet.create({
-  row: { gap: space.sm, paddingVertical: space.xs },
+  row: { gap: 6, paddingVertical: 2 },
   chip: {
-    paddingHorizontal: space.md,
-    height: 40,
+    paddingHorizontal: space.sm,
+    height: 32,
     justifyContent: 'center',
     borderRadius: radius.sm,
     borderWidth: 1,

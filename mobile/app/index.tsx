@@ -65,7 +65,13 @@ export default function ShopScreen() {
       <FlatList
         data={products}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }: { item: ProductView }) => <ProductCard product={item} />}
+        renderItem={({ item }: { item: ProductView }) => (
+          <View style={styles.gridItem}>
+            <ProductCard product={item} />
+          </View>
+        )}
+        numColumns={2}
+        columnWrapperStyle={styles.gridRow}
         contentContainerStyle={[styles.list, { paddingBottom: count > 0 ? 110 : space.xl }]}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[0]}
@@ -146,6 +152,8 @@ export default function ShopScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   list: { paddingHorizontal: space.lg },
+  gridRow: { gap: space.sm },
+  gridItem: { flex: 1, marginBottom: space.sm },
   header: {
     backgroundColor: color.surface,
     marginHorizontal: -space.lg,
