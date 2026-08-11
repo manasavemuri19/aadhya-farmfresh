@@ -4,15 +4,18 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "env": { "EXPO_PUBLIC_API_BASE_URL": "http://192.168.1.5:8000/v1" }
     },
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
+      "channel": "preview",
       "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1" }
     },
     "production": {
       "android": { "buildType": "app-bundle" },
+      "channel": "production",
       "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1" }
     }
   },
