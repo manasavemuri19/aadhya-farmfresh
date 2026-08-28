@@ -44,3 +44,14 @@ export const ordersApi = {
   cancel: (id: string, reason: string) =>
     api.post<OrderView>(`/orders/${id}/cancel`, { reason }, { auth: true }),
 };
+
+export const paymentsApi = {
+  // Stands in for Razorpay's real checkout SDK + async webhook until his
+  // account is live. In production, /payments/verify is a client-side UX
+  // check only — the real confirmation always arrives separately, from
+  // Razorpay's own servers calling /payments/webhook. A mock provider has no
+  // such courier, so this one endpoint produces the same effect a real
+  // webhook delivery would, for local testing and demos only.
+  mockComplete: (orderId: string, outcome: 'success' | 'failure' = 'success') =>
+    api.post<OrderView>('/payments/mock/complete', { order_id: orderId, outcome }, { auth: true }),
+};

@@ -112,7 +112,14 @@ export default function CheckoutScreen() {
       clearCart();
       void queryClient.invalidateQueries({ queryKey: ['orders'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog'] });
-      router.replace(`/order/${order.id}`);
+      // Cash orders are already confirmed server-side — go straight to the
+      // order. Online orders sit in pending_payment until /payments/verify
+      // is called, which is what the payment screen does.
+      if (order.payment.method === 'online' && order.status === 'pending_payment') {
+        router.replace(`/payment?orderId=${order.id}`);
+      } else {
+        router.replace(`/order/${order.id}`);
+      }
     },
   });
 

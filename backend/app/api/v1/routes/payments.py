@@ -91,3 +91,54 @@ async def mock_sign(
     return {
         "signature": payments.sign_for_testing(provider_order_id, provider_payment_id)
     }
+
+
+@router.post("/mock/complete", response_model=OrderView, include_in_schema=False)
+async def mock_complete_payment(
+    body: dict, principal: CurrentUser, svc: Orders, orders: OrderRepo, payments: Payments
+) -> OrderView:
+    """Local-only stand-in for the gateway's webhook.
+
+    `/payments/verify` only checks a signature for the client's own UX — the
+    real confirmation always comes from the gateway's webhook, delivered
+    asynchronously from Razorpay's own servers, never from the client. A mock
+    provider has no such courier, so this endpoint exists purely to produce
+    the same effect a real webhook delivery would: it builds the identical
+    `WebhookEvent` the real `/payments/webhook` route would receive and runs
+    it through the exact same `apply_webhook` path, rather than reimplementing
+    order-confirmation logic a second time.
+
+    Absent whenever a real provider is configured — this is not a route a
+    production build ever exposes.
+    """
+    if settings.payment_provider != "mock":
+        raise NotFound("Not available.")
+    from app.payments.base import WebhookEvent
+    from app.core.ids import new_id
+
+    order_id = body.get("order_id")
+    outcome = body.get("outcome", "success")
+    if not order_id:
+        raise NotFound("order_id is required.")
+
+    order = await svc.get_for_user(order_id, principal.user_id)
+    provider_order_id = order.payment.provider_order_id
+    if not provider_order_id:
+        raise NotFound("This order has no payment session.")
+
+    event = WebhookEvent(
+        event_id=new_id("mockevt", 12),
+        event_type="payment.captured" if outcome == "success" else "payment.failed",
+        provider_order_id=provider_order_id,
+        provider_payment_id=f"mockpay_{new_id('', 10)}",
+        amount_paise=order.total_paise,
+        raw={"source": "mock_complete_endpoint"},
+    )
+
+    first_time = await orders.record_webhook_once(payments.name, event.event_id, event.raw)
+    if first_time:
+        await svc.apply_webhook(event)
+
+    return await svc.get_for_user(order_id, principal.user_id)
+
+
