@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -11,16 +11,17 @@ import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 
 /**
- * Stands in for the real gateway checkout sheet (Razorpay) until the
- * business's account is live. The order is already created server-side in
- * `pending_payment` — this screen's only job is to produce a
- * (provider_order_id, provider_payment_id, signature) triple and post it to
- * /payments/verify, exactly like the real SDK's success callback would.
+ * Two real paths, chosen by `order.payment.provider`:
  *
- * Swapping in real Razorpay later means replacing `simulate()` with a call
- * to Razorpay's Checkout SDK and using *its* callback values instead of the
- * mock-sign endpoint — `confirmPayment()` below and everything else on this
- * screen stays the same, since both paths end at the same /verify call.
+ *  - "razorpay": opens the actual Razorpay-hosted Payment Link in the
+ *    device's browser via the plain `Linking` API — nothing native to add,
+ *    so this ships and updates over `eas update`, not a rebuild. Razorpay
+ *    redirects back to this app's own `aadhya://payment-callback` scheme
+ *    once the customer pays, landing on app/payment-callback.tsx.
+ *
+ *  - "mock": no gateway account exists behind this provider, so there is no
+ *    real page to send anyone to — these buttons stand in for what would
+ *    otherwise be "the customer completed checkout on Razorpay's page."
  */
 export default function PaymentScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
@@ -31,13 +32,17 @@ export default function PaymentScreen() {
   const order = useQuery({
     queryKey: ['order', orderId],
     queryFn: () => ordersApi.get(orderId),
+    // The customer may be away in the browser for a while — keep checking
+    // for the redirect-callback's confirmation without needing a manual
+    // pull-to-refresh when they come back.
+    refetchInterval: (query) => (query.state.data?.status === 'pending_payment' ? 4_000 : false),
   });
 
-  const confirmPayment = useMutation({
+  const confirmMock = useMutation({
     mutationFn: (outcome: 'success' | 'failure') => paymentsApi.mockComplete(orderId, outcome),
-    onSuccess: (order) => {
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['orders'] });
-      if (order.status === 'confirmed') {
+      if (result.status === 'confirmed') {
         router.replace(`/order/${orderId}`);
       } else {
         setFailed(true);
@@ -50,52 +55,61 @@ export default function PaymentScreen() {
     return <ErrorState message="Could not load this order." onRetry={() => void order.refetch()} />;
   }
 
-  if (order.data.payment.method !== 'online' || order.data.status !== 'pending_payment') {
-    // Already paid, cash order, or already resolved some other way — nothing
-    // for this screen to do.
+  if (order.data.status === 'confirmed') {
     router.replace(`/order/${orderId}`);
     return null;
   }
+  if (order.data.payment.method !== 'online' || order.data.status !== 'pending_payment') {
+    router.replace(`/order/${orderId}`);
+    return null;
+  }
+
+  const shortUrl = order.data.payment.checkout_payload?.short_url as string | undefined;
+  const isRealProvider = order.data.payment.provider === 'razorpay';
 
   return (
     <View style={styles.screen}>
       <View style={styles.card}>
         <Text variant="caption">Amount to pay</Text>
         <Text style={styles.amount}>{formatPaise(order.data.total_paise)}</Text>
-        <Text variant="caption" style={styles.note}>
-          Test mode — standing in for the real payment screen until online
-          payments go live. No real money moves here.
-        </Text>
+        {!isRealProvider && (
+          <Text variant="caption" style={styles.note}>
+            Test mode — standing in for the real payment screen until online
+            payments go live. No real money moves here.
+          </Text>
+        )}
       </View>
 
-      {failed && (
-        <Text style={styles.error}>That payment did not go through. Try again.</Text>
-      )}
-      {confirmPayment.isError && (
-        <Text style={styles.error}>
-          {confirmPayment.error instanceof Error ? confirmPayment.error.message : 'Could not confirm payment.'}
-        </Text>
-      )}
+      {failed && <Text style={styles.error}>That payment did not go through. Try again.</Text>}
 
-      <Button
-        label="Simulate successful payment"
-        loading={confirmPayment.isPending}
-        onPress={() => {
-          setFailed(false);
-          confirmPayment.mutate('success');
-        }}
-      />
-      <Button
-        label="Simulate failed payment"
-        variant="secondary"
-        disabled={confirmPayment.isPending}
-        onPress={() => confirmPayment.mutate('failure')}
-      />
-      <Button
-        label="Cancel and go back"
-        variant="ghost"
-        onPress={() => router.replace(`/order/${orderId}`)}
-      />
+      {isRealProvider ? (
+        <>
+          <Button
+            label="Pay now"
+            disabled={!shortUrl}
+            onPress={() => shortUrl && Linking.openURL(shortUrl)}
+          />
+          <Text variant="caption" style={styles.note}>
+            Opens Razorpay's secure payment page. You'll be brought back here
+            automatically once it's done.
+          </Text>
+        </>
+      ) : (
+        <>
+          <Button
+            label="Simulate successful payment"
+            loading={confirmMock.isPending}
+            onPress={() => { setFailed(false); confirmMock.mutate('success'); }}
+          />
+          <Button
+            label="Simulate failed payment"
+            variant="secondary"
+            disabled={confirmMock.isPending}
+            onPress={() => confirmMock.mutate('failure')}
+          />
+        </>
+      )}
+      <Button label="Cancel and go back" variant="ghost" onPress={() => router.replace(`/order/${orderId}`)} />
     </View>
   );
 }

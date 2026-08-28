@@ -138,3 +138,8 @@ class AdjustStockRequest(Schema):
     set_qty: int | None = Field(default=None, ge=0)
     delta_qty: int | None = None
     reason: str = Field(default="manual_adjustment", max_length=64)
+
+
+class SetPriceRequest(Schema):
+    sku: str
+    price_paise: int = Field(ge=0)

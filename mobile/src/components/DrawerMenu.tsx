@@ -56,6 +56,9 @@ export function DrawerMenu({ visible, onClose }: Props) {
             <>
               <MenuRow label="My orders" onPress={() => go('/orders')} />
               <MenuRow label="Profile & address" onPress={() => go('/profile')} />
+              {(user?.role === 'staff' || user?.role === 'admin') && (
+                <MenuRow label="Manage stock" onPress={() => go('/admin/stock')} />
+              )}
               <View style={styles.divider} />
               <MenuRow
                 label="Sign out"

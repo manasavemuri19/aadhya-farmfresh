@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
+    # The app's own deep-link URL that Razorpay redirects the browser back to
+    # once a Payment Link is paid. Matches the scheme in mobile/app.config.js.
+    razorpay_callback_url: str = "aadhya://payment-callback"
 
     # Store rules — all money is in the smallest currency unit (paise).
     currency: str = "INR"

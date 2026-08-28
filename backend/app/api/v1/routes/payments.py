@@ -142,3 +142,71 @@ async def mock_complete_payment(
     return await svc.get_for_user(order_id, principal.user_id)
 
 
+@router.get("/link-callback", response_model=OrderView)
+async def payment_link_callback(
+    principal: CurrentUser,
+    svc: Orders,
+    orders: OrderRepo,
+    payments: Payments,
+    razorpay_payment_id: str,
+    razorpay_payment_link_id: str,
+    razorpay_payment_link_reference_id: str,
+    razorpay_payment_link_status: str,
+    razorpay_signature: str,
+) -> OrderView:
+    """The app's own deep link opens here after the customer pays on
+    Razorpay's hosted Payment Link page and gets redirected back — see
+    `RazorpayProvider.create_order` for why Payment Links rather than the
+    Orders API. Razorpay's own documentation for this flow says to verify
+    the signature and then mark the order as paid directly from that; unlike
+    Standard Checkout's callback_url (which they explicitly warn is UX-only,
+    with the async webhook as the real source of truth), Payment Links do
+    not have an equivalent separate webhook contract for this app to lean
+    on instead, so the verified redirect *is* the confirmation here.
+
+    Only reachable with the real Razorpay provider configured — the mock
+    provider never produces a payment link, so this route has nothing to
+    verify against in mock mode.
+    """
+    if settings.payment_provider != "razorpay":
+        raise NotFound("Not available.")
+    from app.payments.razorpay import RazorpayProvider
+
+    assert isinstance(payments, RazorpayProvider)
+    ok = payments.verify_payment_link_callback(
+        payment_link_id=razorpay_payment_link_id,
+        payment_link_reference_id=razorpay_payment_link_reference_id,
+        payment_link_status=razorpay_payment_link_status,
+        payment_id=razorpay_payment_id,
+        signature=razorpay_signature,
+    )
+    if not ok:
+        log.warning(
+            "payment link callback signature rejected",
+            extra={"reference_id": razorpay_payment_link_reference_id},
+        )
+        raise PaymentFailed("We could not verify that payment.")
+
+    order_id = razorpay_payment_link_reference_id  # set to our order id at link creation
+
+    from app.payments.base import WebhookEvent
+
+    event = WebhookEvent(
+        event_id=f"linkcb_{razorpay_payment_id}",
+        event_type=(
+            "payment.captured" if razorpay_payment_link_status == "paid" else "payment.failed"
+        ),
+        provider_order_id=razorpay_payment_link_id,
+        provider_payment_id=razorpay_payment_id,
+        amount_paise=None,  # webhook path checks this only when present
+        raw={
+            "source": "link_callback",
+            "status": razorpay_payment_link_status,
+        },
+    )
+
+    first_time = await orders.record_webhook_once(payments.name, event.event_id, event.raw)
+    if first_time:
+        await svc.apply_webhook(event)
+
+    return await svc.get_for_user(order_id, principal.user_id)

@@ -155,3 +155,23 @@ export interface TokenPair {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: Record<string, unknown> };
 }
+
+// ---------- admin (staff-only) ----------
+
+export interface AdminVariant {
+  sku: string;
+  label: string;
+  price_paise: number;
+  mrp_paise: number | null;
+  stock_qty: number;
+  is_active: boolean;
+}
+
+export interface AdminProduct {
+  id: string;
+  slug: string;
+  name: string;
+  category: string;
+  is_active: boolean;
+  variants: AdminVariant[];
+}

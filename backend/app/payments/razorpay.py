@@ -43,37 +43,70 @@ class RazorpayProvider(PaymentProvider):
     async def create_order(
         self, *, amount_paise: int, currency: str, receipt: str, notes: dict[str, str]
     ) -> ProviderOrder:
+        """Creates a Razorpay **Payment Link**, not an Orders-API order.
+
+        This is a deliberate choice, not the simpler/default path: Payment
+        Links are the mechanism Razorpay documents for exactly this shape of
+        flow — send the customer to a hosted page, they pay there, they're
+        redirected back via `callback_url`. The alternative (Standard
+        Checkout's in-app popup) requires the native `react-native-razorpay`
+        SDK, which means a new compiled build every time it changes. A
+        Payment Link is just a URL — opening it needs nothing beyond what
+        the app already ships with, so this whole integration can ship and
+        iterate over `eas update`.
+
+        `reference_id` is set to our own order id, so the redirect callback
+        (and any later lookup) can find the order without needing to persist
+        a separate mapping.
+        """
         try:
-            # The SDK is synchronous; these calls are short and infrequent
-            # enough to run inline. Move to a threadpool if that stops holding.
-            order = self._client.order.create(
+            link = self._client.payment_link.create(
                 {
-                    "amount": amount_paise,   # Razorpay also speaks paise
+                    "amount": amount_paise,
                     "currency": currency,
-                    "receipt": receipt,
+                    "description": "Aadya Dairy order",
+                    "reference_id": receipt,
                     "notes": notes,
-                    "payment_capture": 1,
+                    "callback_url": settings.razorpay_callback_url,
+                    "callback_method": "get",
                 }
             )
         except Exception as exc:
-            log.exception("razorpay order creation failed", extra={"receipt": receipt})
+            log.exception("razorpay payment link creation failed", extra={"receipt": receipt})
             raise UpstreamError("Could not start the payment. Try again.") from exc
 
         return ProviderOrder(
             provider=self.name,
-            provider_order_id=order["id"],
+            provider_order_id=link["id"],
             amount_paise=amount_paise,
             currency=currency,
             checkout_payload={
                 "provider": self.name,
-                "key": settings.razorpay_key_id,   # publishable; safe to send
-                "order_id": order["id"],
-                "amount": amount_paise,
-                "currency": currency,
-                "name": "Aadya Pickles & Dairy",
-                "description": receipt,
+                "short_url": link["short_url"],
             },
         )
+
+    def verify_payment_link_callback(
+        self,
+        *,
+        payment_link_id: str,
+        payment_link_reference_id: str,
+        payment_link_status: str,
+        payment_id: str,
+        signature: str,
+    ) -> bool:
+        """Payment Links use a different signature scheme from Standard
+        Checkout — a different set of fields, in a fixed order, joined with
+        `|`. This is Razorpay's own documented formula for this flow; do not
+        substitute the Standard Checkout formula here, the two are not
+        interchangeable.
+        """
+        message = (
+            f"{payment_link_id}|{payment_link_reference_id}|"
+            f"{payment_link_status}|{payment_id}"
+        ).encode()
+        expected = hmac.new(self._secret, message, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, signature)
 
     def verify_checkout_signature(
         self, *, provider_order_id: str, provider_payment_id: str, signature: str

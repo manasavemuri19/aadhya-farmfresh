@@ -198,6 +198,12 @@ class ProductRepository:
         )
         return result.rowcount == 1
 
+    async def set_price(self, sku: str, price_paise: int) -> bool:
+        result = await self.session.execute(
+            update(VariantRow).where(VariantRow.sku == sku).values(price_paise=price_paise)
+        )
+        return result.rowcount == 1
+
     async def adjust_stock(self, sku: str, delta: int) -> bool:
         result = await self.session.execute(
             update(VariantRow)

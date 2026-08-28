@@ -17,7 +17,7 @@ from app.domain.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
 from app.schemas.catalog import Product
-from app.schemas.order import AdjustStockRequest, OrderView, UpdateOrderStatusRequest
+from app.schemas.order import AdjustStockRequest, OrderView, SetPriceRequest, UpdateOrderStatusRequest
 from app.services.order_service import OrderService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -60,6 +60,19 @@ async def adjust_stock(
         sku=body.sku, delta=delta, reason=reason, actor=staff.user_id
     )
     return {"sku": body.sku, "ok": True}
+
+
+@router.post("/price", response_model=dict)
+async def set_price(
+    body: SetPriceRequest, staff: StaffUser, products: Products
+) -> dict[str, object]:
+    """Direct price change by a staff member. No sanity-range guard here —
+    unlike the automated Google Sheet sync, this is a deliberate action by a
+    person looking at the screen, not an unattended process that could apply
+    a stray typo unseen."""
+    if not await products.set_price(body.sku, body.price_paise):
+        raise NotFound("No such SKU.")
+    return {"sku": body.sku, "price_paise": body.price_paise, "ok": True}
 
 
 @router.post("/products/{sku}/availability", response_model=dict)

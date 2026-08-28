@@ -15,6 +15,22 @@ async def _stock(products: ProductRepository, sku: str) -> int:
     return result.scalars().one()
 
 
+async def _price(products: ProductRepository, sku: str) -> int:
+    result = await products.session.execute(
+        select(VariantRow.price_paise).where(VariantRow.sku == sku)
+    )
+    return result.scalars().one()
+
+
+async def test_set_price_updates_the_variant(products, milk):
+    assert await products.set_price("MILK-COW-1L", 3800) is True
+    assert await _price(products, "MILK-COW-1L") == 3800
+
+
+async def test_set_price_on_unknown_sku_returns_false(products, milk):
+    assert await products.set_price("DOES-NOT-EXIST", 1000) is False
+
+
 async def test_reserve_decrements_stock(products, milk):
     assert await products.reserve_stock("MILK-COW-1L", 2) is True
     assert await _stock(products, "MILK-COW-1L") == 3

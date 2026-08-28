@@ -58,8 +58,10 @@ export default function RootLayout() {
           <Stack.Screen name="cart" options={{ title: 'Your cart' }} />
           <Stack.Screen name="checkout" options={{ title: 'Checkout' }} />
           <Stack.Screen name="payment" options={{ title: 'Payment', headerBackVisible: false }} />
+          <Stack.Screen name="payment-callback" options={{ title: 'Payment', headerBackVisible: false }} />
           <Stack.Screen name="orders" options={{ title: 'My orders' }} />
           <Stack.Screen name="profile" options={{ title: 'Profile' }} />
+          <Stack.Screen name="admin/stock" options={{ title: 'Manage Stock' }} />
           <Stack.Screen name="order/[id]" options={{ title: 'Order' }} />
           <Stack.Screen name="auth/phone" options={{ title: 'Sign in', presentation: 'modal' }} />
           <Stack.Screen name="auth/otp" options={{ title: 'Verify' }} />
