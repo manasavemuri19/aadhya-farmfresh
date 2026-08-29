@@ -87,6 +87,16 @@ module.exports = {
             'Aadya uses your location to find the right delivery address and estimate arrival time.',
         },
       ],
+      // No entry here for @react-native-google-signin/google-signin.
+      // Its config plugin exists only to wire up either a Firebase
+      // google-services.json (Android) or an iOS URL scheme — neither
+      // applies to this Android-only, Firebase-free setup. The native
+      // module reads its client ID purely from the JS-level
+      // GoogleSignin.configure({ webClientId }) call (see
+      // src/lib/googleAuth.ts), confirmed by inspecting the package's own
+      // native Android source rather than assumed. Play Services matches
+      // the app to its Android OAuth client by package name + signing
+      // certificate at request time — nothing else to configure here.
     ],
     updates: {
       url: 'https://u.expo.dev/1b00b0a2-aeb0-4d97-adb0-344bd89331ae',
