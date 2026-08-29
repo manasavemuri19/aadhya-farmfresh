@@ -5,18 +5,30 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "env": { "EXPO_PUBLIC_API_BASE_URL": "http://192.168.1.5:8000/v1" }
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://192.168.1.5:8000/v1",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "972650577314-sr76omc5bmvqq7uq707f3k017q2qsh8b.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "972650577314-l0v61d1do6ucbd8fppb7p807aqa6v7v9.apps.googleusercontent.com"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
       "channel": "preview",
-      "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1" }
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "972650577314-sr76omc5bmvqq7uq707f3k017q2qsh8b.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "972650577314-l0v61d1do6ucbd8fppb7p807aqa6v7v9.apps.googleusercontent.com"
+      }
     },
     "production": {
       "android": { "buildType": "app-bundle" },
       "channel": "production",
-      "env": { "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1" }
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://aadhya-farmfresh-production.up.railway.app/v1",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "972650577314-sr76omc5bmvqq7uq707f3k017q2qsh8b.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "972650577314-l0v61d1do6ucbd8fppb7p807aqa6v7v9.apps.googleusercontent.com"
+      }
     }
   },
   "submit": { "production": {} }

@@ -8,7 +8,6 @@ import { Button } from '../src/components/Button';
 import { QtyStepper } from '../src/components/QtyStepper';
 import { EmptyState, ErrorState, Loading } from '../src/components/Feedback';
 import { cartLines, useCart } from '../src/store/cart';
-import { useSession } from '../src/store/session';
 import { cartApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
 import { productImageSource } from '../src/lib/productImages';
@@ -19,7 +18,6 @@ export default function CartScreen() {
   const router = useRouter();
   const items = useCart((s) => s.items);
   const setQty = useCart((s) => s.setQty);
-  const status = useSession((s) => s.status);
 
   const lines = cartLines(items);
 
@@ -134,15 +132,9 @@ export default function CartScreen() {
           </Text>
         )}
         <Button
-          label={status === 'signed_in' ? 'Choose address' : 'Sign in to continue'}
+          label="Choose address"
           disabled={!data.meets_minimum}
-          onPress={() =>
-            router.push(
-              status === 'signed_in'
-                ? '/checkout'
-                : { pathname: '/auth/phone', params: { redirectTo: '/checkout' } },
-            )
-          }
+          onPress={() => router.push('/checkout')}
         />
       </View>
     </View>

@@ -6,7 +6,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Text } from '../src/components/Text';
 import { EmptyState, ErrorState, Loading } from '../src/components/Feedback';
 import { ordersApi } from '../src/api/endpoints';
-import { useSession } from '../src/store/session';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { OrderStatus, OrderView } from '../src/api/types';
@@ -24,24 +23,10 @@ const LABEL: Record<OrderStatus, string> = {
 export default function OrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const status = useSession((s) => s.status);
-
   const orders = useQuery({
     queryKey: ['orders'],
     queryFn: () => ordersApi.list(),
-    enabled: status === 'signed_in',
   });
-
-  if (status === 'signed_out') {
-    return (
-      <EmptyState
-        title="Sign in to see your orders"
-        message="Your past orders and live deliveries will show up here."
-        actionLabel="Sign in"
-        onAction={() => router.push('/auth/phone')}
-      />
-    );
-  }
 
   if (orders.isPending) return <Loading />;
   if (orders.isError) {

@@ -17,14 +17,11 @@ export const cartApi = {
 };
 
 export const authApi = {
-  requestOtp: (phone: string) =>
-    api.post<{ sent: boolean; expires_in_seconds: number; resend_after_seconds: number; debug_code: string | null }>(
-      '/auth/otp/request', { phone },
-    ),
-  verifyOtp: (phone: string, code: string) =>
-    api.post<{ tokens: TokenPair; user: UserProfile }>('/auth/otp/verify', { phone, code }),
+  googleSignIn: (idToken: string) =>
+    api.post<{ tokens: TokenPair; user: UserProfile }>('/auth/google', { id_token: idToken }),
   me: () => api.get<UserProfile>('/auth/me', true),
   updateName: (name: string) => api.patch<UserProfile>('/auth/me', { name }),
+  updatePhone: (phone: string) => api.patch<UserProfile>('/auth/me', { phone }),
   saveAddress: (address: Address) => api.put<void>('/auth/me/addresses', address),
 };
 

@@ -70,7 +70,8 @@ class Address(Schema):
 
 class UserProfile(Schema):
     id: str
-    phone: str
+    phone: str | None = None
+    email: str | None = None
     name: str = ""
     role: str = "customer"
     addresses: list[Address] = []
@@ -78,3 +79,8 @@ class UserProfile(Schema):
 
 class UpdateProfile(Schema):
     name: str | None = Field(default=None, max_length=80)
+    phone: str | None = Field(default=None, max_length=16)
+
+
+class GoogleSignInRequest(Schema):
+    id_token: str

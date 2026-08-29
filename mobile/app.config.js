@@ -30,6 +30,14 @@ const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ??
   'https://aadhya-farmfresh-production.up.railway.app/v1';
 
+// Google OAuth client IDs — same "read at config-eval time, safe default"
+// approach as API_BASE_URL above. Empty string (not a fake placeholder) is
+// the deliberate default: an empty client ID makes Google's own SDK fail
+// immediately and obviously ("invalid_client") rather than pretend to work
+// and fail confusingly deeper in the flow.
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+
 module.exports = {
   expo: {
     name: 'Aadya',
@@ -88,6 +96,8 @@ module.exports = {
     },
     extra: {
       apiBaseUrl: API_BASE_URL,
+      googleWebClientId: GOOGLE_WEB_CLIENT_ID,
+      googleAndroidClientId: GOOGLE_ANDROID_CLIENT_ID,
       eas: { projectId: '1b00b0a2-aeb0-4d97-adb0-344bd89331ae' },
     },
   },

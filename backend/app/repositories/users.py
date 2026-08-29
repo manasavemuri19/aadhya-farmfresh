@@ -18,6 +18,8 @@ def _to_dict(user: UserRow) -> dict[str, Any]:
     return {
         "id": user.id,
         "phone": user.phone,
+        "email": user.email,
+        "google_sub": user.google_sub,
         "name": user.name,
         "role": user.role,
         "addresses": [
@@ -58,6 +60,15 @@ class UserRepository:
         row = (await self.session.execute(stmt)).scalars().first()
         return _to_dict(row) if row else None
 
+    async def get_by_google_sub(self, google_sub: str) -> dict[str, Any] | None:
+        stmt = (
+            select(UserRow)
+            .options(selectinload(UserRow.addresses))
+            .where(UserRow.google_sub == google_sub)
+        )
+        row = (await self.session.execute(stmt)).scalars().first()
+        return _to_dict(row) if row else None
+
     async def get_or_create_by_phone(self, phone: str) -> dict[str, Any]:
         """Insert-or-ignore on the unique phone column.
 
@@ -81,12 +92,40 @@ class UserRepository:
         assert user is not None  # guaranteed: we just inserted or it existed
         return user
 
+    async def get_or_create_by_google(
+        self, *, google_sub: str, email: str, name: str
+    ) -> dict[str, Any]:
+        """Same insert-or-ignore shape as phone sign-in, keyed on google_sub
+        instead. `name` is only applied on first creation — an existing
+        account's name (which the person may have since edited in-app) is
+        never silently overwritten by whatever their Google profile says.
+        """
+        await self.session.execute(
+            insert(UserRow)
+            .values(
+                id=new_user_id(),
+                google_sub=google_sub,
+                email=email,
+                name=name,
+                role=Role.CUSTOMER.value,
+                last_login_at=datetime.now(UTC),
+            )
+            .on_conflict_do_nothing(index_elements=[UserRow.google_sub])
+        )
+        await self.session.flush()
+
+        user = await self.get_by_google_sub(google_sub)
+        assert user is not None
+        return user
+
     async def update_profile(self, user_id: str, changes: dict[str, Any]) -> None:
         row = await self.session.get(UserRow, user_id)
         if row is None:
             return
         if changes.get("name") is not None:
             row.name = changes["name"]
+        if changes.get("phone") is not None:
+            row.phone = changes["phone"]
 
     async def upsert_address(self, user_id: str, address: dict[str, Any]) -> None:
         """Replace the address with the same label, otherwise add it."""
