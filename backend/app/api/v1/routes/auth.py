@@ -8,9 +8,7 @@ from app.api.deps import CurrentUser, get_auth_service, get_user_repo
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
     Address,
-    OtpRequest,
-    OtpRequestResponse,
-    OtpVerify,
+    GoogleSignInRequest,
     RefreshRequest,
     TokenPair,
     UpdateProfile,
@@ -24,15 +22,18 @@ AuthSvc = Annotated[AuthService, Depends(get_auth_service)]
 Users = Annotated[UserRepository, Depends(get_user_repo)]
 
 
-@router.post("/otp/request", response_model=OtpRequestResponse)
-async def request_otp(body: OtpRequest, svc: AuthSvc) -> OtpRequestResponse:
-    return await svc.request_otp(body.phone)
-
-
-@router.post("/otp/verify")
-async def verify_otp(body: OtpVerify, svc: AuthSvc) -> dict:
-    tokens, profile = await svc.verify_otp(body.phone, body.code)
+@router.post("/google")
+async def google_sign_in(body: GoogleSignInRequest, svc: AuthSvc) -> dict:
+    tokens, profile = await svc.verify_google_and_login(body.id_token)
     return {"tokens": tokens.model_dump(), "user": profile.model_dump()}
+
+
+# Phone + OTP login has been retired in favour of Google sign-in as the only
+# entry point — see AuthService for why: get_or_create_by_phone relied on
+# phone being a unique column, and phone is now plain delivery contact info,
+# not a login identity, so it can't safely stay unique. The OTP repository,
+# its idempotent-replay logic, and its tests are left in place (not deleted)
+# in case phone login is ever wanted again — only the routes are gone.
 
 
 @router.post("/refresh", response_model=TokenPair)

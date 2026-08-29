@@ -47,6 +47,12 @@ class Settings(BaseSettings):
 
     # Payments
     payment_provider: Literal["mock", "razorpay"] = "mock"
+    # Google Sign-In. Both client IDs are accepted as valid token audiences —
+    # the Android app and (if ever added) a web client each get their own ID
+    # from Google, and a token minted for either is legitimate.
+    google_web_client_id: str = ""
+    google_android_client_id: str = ""
+
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""

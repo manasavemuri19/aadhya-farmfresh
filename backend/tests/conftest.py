@@ -70,10 +70,17 @@ def order_service(session, products, orders) -> OrderService:
 
 @pytest.fixture
 async def user(session):
-    """Orders reference users by foreign key, so tests need a real one."""
+    """Orders reference users by foreign key, so tests need a real one.
+
+    Uses the Google sign-in path, matching how real accounts are created
+    now — order-flow tests don't care which auth mechanism made the user,
+    they just need a real row to reference.
+    """
     from app.repositories.users import UserRepository
 
-    record = await UserRepository(session).get_or_create_by_phone("+919876543210")
+    record = await UserRepository(session).get_or_create_by_google(
+        google_sub="test_google_sub_0001", email="test@example.com", name="Test User",
+    )
     await session.flush()
     return record
 

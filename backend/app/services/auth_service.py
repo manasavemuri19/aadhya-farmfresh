@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+
 from app.core.config import settings
 from app.core.errors import RateLimited, Unauthorized
 from app.core.ids import new_otp_code
@@ -13,6 +16,12 @@ from app.schemas.auth import OtpRequestResponse, TokenPair, UserProfile
 log = logging.getLogger(__name__)
 
 _FAILURE_MESSAGE = "That code is not valid. Request a new one."
+_GOOGLE_FAILURE_MESSAGE = "Could not sign in with Google. Try again."
+
+# One HTTP transport, reused across verification calls rather than opened
+# fresh each time — this is what the google-auth library expects to fetch
+# Google's public signing keys with.
+_google_transport = google_requests.Request()
 
 
 class AuthService:
@@ -63,6 +72,45 @@ class AuthService:
         user = await self.users.get_or_create_by_phone(phone)
         return self._issue_tokens(user), self._to_profile(user)
 
+    async def verify_google_and_login(self, id_token: str) -> tuple[TokenPair, UserProfile]:
+        """Verify a Google-issued ID token and sign the person in, creating
+        an account on first sign-in.
+
+        Verification is delegated entirely to `google-auth`, which fetches
+        and caches Google's public signing keys and checks the token's
+        signature, expiry, and issuer — this function only adds the one
+        check that library can't do for us: that the token was actually
+        minted for *this* app, not some other app entirely (the classic
+        token-substitution attack an audience check exists to prevent).
+        """
+        accepted_audiences = [
+            aud for aud in (settings.google_web_client_id, settings.google_android_client_id) if aud
+        ]
+        if not accepted_audiences:
+            log.error("google sign-in attempted with no client IDs configured")
+            raise Unauthorized(_GOOGLE_FAILURE_MESSAGE)
+
+        try:
+            claims = google_id_token.verify_oauth2_token(id_token, _google_transport)
+        except Exception:
+            log.info("google id token failed verification")
+            raise Unauthorized(_GOOGLE_FAILURE_MESSAGE) from None
+
+        if claims.get("aud") not in accepted_audiences:
+            log.warning("google id token had an unexpected audience")
+            raise Unauthorized(_GOOGLE_FAILURE_MESSAGE)
+
+        sub = claims.get("sub")
+        if not sub:
+            raise Unauthorized(_GOOGLE_FAILURE_MESSAGE)
+
+        user = await self.users.get_or_create_by_google(
+            google_sub=sub,
+            email=claims.get("email", ""),
+            name=claims.get("name", ""),
+        )
+        return self._issue_tokens(user), self._to_profile(user)
+
     async def refresh(self, refresh_token: str) -> TokenPair:
         payload = decode_token(refresh_token, expected_type="refresh")
         user = await self.users.get_by_id(payload["sub"])
@@ -87,7 +135,8 @@ class AuthService:
     def _to_profile(user: dict) -> UserProfile:
         return UserProfile(
             id=user["id"],
-            phone=user["phone"],
+            phone=user.get("phone"),
+            email=user.get("email"),
             name=user.get("name", ""),
             role=user.get("role", "customer"),
             addresses=user.get("addresses", []),

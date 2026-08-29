@@ -58,7 +58,18 @@ class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    phone: Mapped[str] = mapped_column(String(16), unique=True, nullable=False, index=True)
+    # Nullable now: Google sign-in is the primary login path and does not
+    # supply a phone number. Phone is still collected, separately, as a
+    # plain delivery-contact field — see UpdateProfile — but no longer gates
+    # who can sign in, and is deliberately NOT unique: it is contact
+    # information now, not an identity, and forcing uniqueness on it would
+    # break registration for two unrelated households that happen to share
+    # a number (a shared landline, a typo, a reused old number).
+    phone: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    # Google's stable per-user identifier (the JWT `sub` claim). Unique
+    # whenever present; null for any account that predates Google sign-in.
+    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     name: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     role: Mapped[str] = mapped_column(String(16), default="customer", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

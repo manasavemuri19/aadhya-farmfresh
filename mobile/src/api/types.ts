@@ -139,7 +139,8 @@ export interface OrderView {
 
 export interface UserProfile {
   id: string;
-  phone: string;
+  phone: string | null;
+  email: string | null;
   name: string;
   role: string;
   addresses: Address[];
