@@ -1,8 +1,15 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSession } from '../../src/store/session';
 import { color, font } from '../../src/theme/tokens';
+
+// Extra room below the default safe-area inset. The stock system nav bar
+// inset alone was leaving labels feeling cramped/clipped on several
+// devices — this pads it out by roughly half an inch (~36dp) beyond that,
+// split between a taller bar and more bottom padding.
+const EXTRA_BOTTOM_SPACE = 36;
 
 /**
  * Two tabs for a customer, three for staff/admin — "Update Stock" is
@@ -18,6 +25,7 @@ import { color, font } from '../../src/theme/tokens';
 export default function TabsLayout() {
   const role = useSession((s) => s.user?.role);
   const canManageStock = role === 'staff' || role === 'admin';
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -25,7 +33,13 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: color.primary,
         tabBarInactiveTintColor: color.muted,
-        tabBarStyle: { backgroundColor: color.card, borderTopColor: color.line },
+        tabBarStyle: {
+          backgroundColor: color.card,
+          borderTopColor: color.line,
+          height: 56 + insets.bottom + EXTRA_BOTTOM_SPACE,
+          paddingTop: 8,
+          paddingBottom: insets.bottom + EXTRA_BOTTOM_SPACE,
+        },
         tabBarLabelStyle: { fontFamily: font.bodyMedium, fontSize: 11 },
       }}
     >

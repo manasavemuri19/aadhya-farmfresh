@@ -74,28 +74,31 @@ export default function OrderTab() {
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[0]}
         ListHeaderComponent={
-          <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
-            <Text variant="display" style={styles.wordmark}>Aadya</Text>
-            <Text
-              variant="caption"
-              style={styles.tagline}
-              numberOfLines={1}
-              onPress={() => {
-                if (location.status === 'denied' || location.status === 'error') {
-                  router.push('/profile');
-                } else {
-                  void location.request();
-                }
-              }}
-            >
-              {location.status === 'found' && location.label
-                ? `📍 ${location.label} · 20–45 min`
-                : location.status === 'locating'
-                  ? 'Finding your location…'
-                  : location.status === 'denied'
-                    ? 'Tap to set delivery address'
-                    : 'Pickles & Dairy · 20–45 min'}
-            </Text>
+          <View style={styles.header}>
+            <View style={[styles.brandBand, { paddingTop: insets.top + space.md }]}>
+              <Text variant="display" tone="onPrimary" style={styles.wordmark}>Aadya Dairy</Text>
+              <Text
+                variant="caption"
+                tone="onPrimary"
+                style={styles.tagline}
+                numberOfLines={1}
+                onPress={() => {
+                  if (location.status === 'denied' || location.status === 'error') {
+                    router.push('/profile');
+                  } else {
+                    void location.request();
+                  }
+                }}
+              >
+                {location.status === 'found' && location.label
+                  ? `📍 ${location.label}`
+                  : location.status === 'locating'
+                    ? 'Finding your location…'
+                    : location.status === 'denied'
+                      ? 'Tap to set delivery address'
+                      : 'Pickles & Dairy'}
+              </Text>
+            </View>
 
             <View style={styles.searchWrap}>
               <SearchBar value={search} onChangeText={setSearch} />
@@ -131,11 +134,15 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: color.surface,
     marginHorizontal: -space.lg,
-    paddingHorizontal: space.lg,
     paddingBottom: space.xs,
+  },
+  brandBand: {
+    backgroundColor: color.primary,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.md,
   },
   wordmark: { fontSize: size.xxl },
   tagline: { fontFamily: font.bodyMedium, marginTop: 2 },
-  searchWrap: { marginTop: space.md },
+  searchWrap: { marginTop: space.md, paddingHorizontal: space.lg },
   empty: { textAlign: 'center', marginTop: space.xxl },
 });
