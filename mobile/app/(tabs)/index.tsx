@@ -76,10 +76,10 @@ export default function OrderTab() {
         ListHeaderComponent={
           <View style={styles.header}>
             <View style={[styles.brandBand, { paddingTop: insets.top + space.md }]}>
-              <Text variant="display" tone="onPrimary" style={styles.wordmark}>Aadya Dairy</Text>
+              <Text variant="display" tone="ink" style={styles.wordmark}>Aadya Dairy</Text>
               <Text
                 variant="caption"
-                tone="onPrimary"
+                tone="ink"
                 style={styles.tagline}
                 numberOfLines={1}
                 onPress={() => {
