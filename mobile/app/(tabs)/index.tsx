@@ -76,18 +76,10 @@ export default function OrderTab() {
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <View style={[styles.orangeZone, { paddingTop: insets.top + space.md }]}>
-              {/* Diagonal gradients need a real native library (a rebuild,
-                  not an update) — this approximates the same warm orange
-                  fade top-to-bottom using nothing but plain Views, so it's
-                  safe to ship instantly and never risks the native-module
-                  crash a half-linked gradient library caused before. Scoped
-                  to just this zone, not the search bar or category rail
-                  below it. */}
-              <GradientBackdrop />
               <Text variant="display" style={styles.wordmark}>Aadya Dairy</Text>
               <Text
                 variant="caption"
-                style={styles.tagline}
+                style={[styles.tagline, styles.taglineDark]}
                 numberOfLines={1}
                 onPress={() => {
                   if (location.status === 'denied' || location.status === 'error') {
@@ -98,12 +90,12 @@ export default function OrderTab() {
                 }}
               >
                 {location.status === 'found' && location.label
-                  ? `📍 ${location.label} · 20–45 min`
+                  ? `📍 ${location.label}`
                   : location.status === 'locating'
                     ? 'Finding your location…'
                     : location.status === 'denied'
                       ? 'Tap to set delivery address'
-                      : 'Pickles & Dairy · 20–45 min'}
+                      : 'Pickles & Dairy'}
               </Text>
             </View>
 
@@ -144,8 +136,11 @@ const styles = StyleSheet.create({
     marginHorizontal: -space.lg,
   },
   orangeZone: {
-    position: 'relative',
-    overflow: 'hidden',
+    // Two banded-gradient attempts both showed visible seams between
+    // strips — a true smooth gradient needs a native library (a rebuild,
+    // not an update), so a plain solid fill is the honest, seam-free choice
+    // until that trade-off is worth making.
+    backgroundColor: color.primary,
     paddingHorizontal: space.lg,
     paddingBottom: space.md,
   },
@@ -156,40 +151,7 @@ const styles = StyleSheet.create({
   },
   wordmark: { fontSize: size.xxl },
   tagline: { fontFamily: font.bodyMedium, marginTop: 2 },
+  taglineDark: { color: color.ink },
   searchWrap: { marginTop: space.md },
   empty: { textAlign: 'center', marginTop: space.xxl },
 });
-
-/**
- * A soft top-to-bottom fade from `color.primary` into `color.primaryPressed`,
- * built from plain stacked Views — deliberately not expo-linear-gradient.
- * That package needs its native module compiled into the app, which only
- * happens on a full `eas build`; shipping code that references it through
- * `eas update` alone crashes the app on launch, since the JS bundle updates
- * instantly but the native binary it's running inside does not. Capped at
- * 80% opacity at its darkest (not fully opaque primaryPressed) so the fade
- * stays gentle rather than ending in a hard, saturated block of colour.
- */
-function GradientBackdrop() {
-  const BANDS = 14;
-  const MAX_OPACITY = 0.8;
-  return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: color.primary }]} />
-      {Array.from({ length: BANDS }).map((_, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: `${(i / BANDS) * 100}%`,
-            height: `${100 / BANDS + 1}%`, // +1 avoids hairline seams between bands
-            backgroundColor: color.primaryPressed,
-            opacity: ((i + 1) / BANDS) * MAX_OPACITY,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
