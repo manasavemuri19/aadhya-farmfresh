@@ -28,10 +28,24 @@
 import Constants from 'expo-constants';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 
-const webClientId = Constants.expoConfig?.extra?.googleWebClientId as string | undefined;
+/**
+ * Read fresh every time, not cached in a module-level constant. A
+ * module-top-level read only runs once, the moment this file is first
+ * imported — normally fine, but an OTA update reloads the JS bundle in
+ * place without a full app restart, and that reload can re-run this line
+ * before the native Constants bridge has finished re-initialising. The
+ * value baked into the app never changes; reading it too early can still
+ * come back empty. A function call re-reads it at the actual moment of use,
+ * by which point the app has been running and interactive for a while —
+ * there's no realistic "too early" left.
+ */
+function getWebClientId(): string | undefined {
+  return Constants.expoConfig?.extra?.googleWebClientId as string | undefined;
+}
 
 let configured = false;
 function ensureConfigured() {
+  const webClientId = getWebClientId();
   if (configured || !webClientId) return;
   GoogleSignin.configure({ webClientId });
   configured = true;
@@ -44,7 +58,7 @@ export interface GoogleSignInResult {
 /** Returns null on cancellation — that's not an error, just nothing to do. */
 export async function signInWithGoogle(): Promise<GoogleSignInResult | null> {
   ensureConfigured();
-  if (!webClientId) {
+  if (!getWebClientId()) {
     throw new Error("Sign-in isn't configured yet on this build.");
   }
 
@@ -62,7 +76,7 @@ export async function signInWithGoogle(): Promise<GoogleSignInResult | null> {
 }
 
 export function isGoogleConfigured(): boolean {
-  return Boolean(webClientId);
+  return Boolean(getWebClientId());
 }
 
 function isCancelled(err: unknown): boolean {
