@@ -79,6 +79,38 @@ export function isGoogleConfigured(): boolean {
   return Boolean(getWebClientId());
 }
 
+/**
+ * Clears the *native* Google session, not just this app's own tokens.
+ *
+ * `GoogleSignin.signIn()` is designed to be silent on a return visit — Play
+ * Services caches the last-used account and hands it straight back without
+ * showing the chooser, which is normally the desired, low-friction behaviour.
+ * But it means that if our own sign-out only clears the app's JWTs (see
+ * session.ts) and never tells the native SDK to forget the account, every
+ * subsequent "Continue with Google" — and "Register with Google", which is
+ * the exact same call — silently re-authenticates as whoever was last
+ * signed in. There is no way to switch or add an account, and no way to
+ * test the "new user" registration path a second time on the same device.
+ *
+ * `GoogleSignin.signOut()` only clears that local cache; it does not revoke
+ * the app's access grant (that's `revokeAccess()`, and isn't what's needed
+ * here — the person should still count as a returning user of the *app* if
+ * they pick the same account again, just via the chooser this time).
+ *
+ * Deliberately swallows errors: this runs as part of app-level sign-out,
+ * which must always succeed. Calling it while there is no active native
+ * session (e.g. never configured yet, or already signed out) throws, and
+ * that's not a real failure worth surfacing.
+ */
+export async function signOutOfGoogle(): Promise<void> {
+  try {
+    ensureConfigured();
+    await GoogleSignin.signOut();
+  } catch {
+    // No active Google session to clear — nothing to do.
+  }
+}
+
 function isCancelled(err: unknown): boolean {
   return Boolean(err && typeof err === 'object' && 'code' in err && err.code === statusCodes.SIGN_IN_CANCELLED);
 }
