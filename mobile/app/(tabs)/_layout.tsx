@@ -1,5 +1,5 @@
-import { View } from 'react-native';
 import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 import { useSession } from '../../src/store/session';
 import { color, font } from '../../src/theme/tokens';
@@ -10,6 +10,10 @@ import { color, font } from '../../src/theme/tokens';
  * hidden from the bar via `href: null` for anyone without the role, rather
  * than being a second, separate navigator. One tree, one set of screens,
  * role only ever changes what's visible.
+ *
+ * Icons come from @expo/vector-icons, which ships as part of Expo's core
+ * SDK — already linked in every existing build, so real icons here don't
+ * cost a new native module or another `eas build`.
  */
 export default function TabsLayout() {
   const role = useSession((s) => s.user?.role);
@@ -29,7 +33,9 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Order',
-          tabBarIcon: ({ color: tint }) => <Dot color={tint} />,
+          tabBarIcon: ({ color: tint, focused }) => (
+            <Ionicons name={focused ? 'bag' : 'bag-outline'} size={22} color={tint} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -37,24 +43,20 @@ export default function TabsLayout() {
         options={{
           title: 'Update Stock',
           href: canManageStock ? undefined : null,
-          tabBarIcon: ({ color: tint }) => <Dot color={tint} />,
+          tabBarIcon: ({ color: tint, focused }) => (
+            <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={22} color={tint} />
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color: tint }) => <Dot color={tint} />,
+          tabBarIcon: ({ color: tint, focused }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={tint} />
+          ),
         }}
       />
     </Tabs>
-  );
-}
-
-// A plain dot in place of an icon-font dependency — keeps the tab bar from
-// needing another package just for glyphs.
-function Dot({ color: tint }: { color: string }) {
-  return (
-    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tint }} />
   );
 }

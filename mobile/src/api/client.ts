@@ -31,10 +31,22 @@ const FALLBACK_BASE_URL = 'https://aadhya-farmfresh-production.up.railway.app/v1
 // very first action. 40s covers a cold start with margin.
 const TIMEOUT_MS = 40_000;
 
-export const API_BASE_URL: string =
-  process.env.EXPO_PUBLIC_API_BASE_URL ??
-  (Constants.expoConfig?.extra?.apiBaseUrl as string | undefined) ??
-  FALLBACK_BASE_URL;
+// Not a plain top-level const — see the equivalent comment in
+// src/lib/googleAuth.ts for why. The first option here is safe (inlined at
+// bundle time by Metro, not read from a native bridge), but the second
+// option, Constants.expoConfig, is read at runtime and shares the exact
+// same "read too early after an in-place OTA reload" hazard — and the
+// first option is only reliably present when `eas update` was run with
+// EXPO_PUBLIC_API_BASE_URL set in the calling shell, which has been missed
+// before on this project. A function call re-reads fresh at the moment of
+// use rather than caching a possibly-premature read once at import time.
+export function getApiBaseUrl(): string {
+  return (
+    process.env.EXPO_PUBLIC_API_BASE_URL ??
+    (Constants.expoConfig?.extra?.apiBaseUrl as string | undefined) ??
+    FALLBACK_BASE_URL
+  );
+}
 
 export class ApiError extends Error {
   readonly code: string;
@@ -73,7 +85,7 @@ async function refreshTokens(): Promise<boolean> {
     const refreshToken = await tokenStore.getRefreshToken();
     if (!refreshToken) return false;
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      const response = await fetch(`${getApiBaseUrl()}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken }),
@@ -112,7 +124,7 @@ async function send<T>(path: string, options: RequestOptions, retrying = false):
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
