@@ -285,6 +285,9 @@ class OrderService:
                     "provider_order_id": (
                         provider_order.provider_order_id if provider_order else None
                     ),
+                    "checkout_payload": (
+                        provider_order.checkout_payload if provider_order else None
+                    ),
                 },
             }
         )

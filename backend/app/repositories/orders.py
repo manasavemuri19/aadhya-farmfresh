@@ -58,6 +58,7 @@ def _to_dict(row: OrderRow) -> dict[str, Any]:
             "provider": row.payment.provider,
             "provider_order_id": row.payment.provider_order_id,
             "provider_payment_id": row.payment.provider_payment_id,
+            "checkout_payload": row.payment.checkout_payload,
         }
         if row.payment
         else None,
@@ -122,6 +123,7 @@ class OrderRepository:
             provider=payment["provider"],
             provider_order_id=payment["provider_order_id"],
             provider_payment_id=None,
+            checkout_payload=payment.get("checkout_payload"),
         )
         self.session.add(row)
         await self.session.flush()
