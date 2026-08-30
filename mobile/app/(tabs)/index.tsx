@@ -3,7 +3,6 @@ import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { LinearGradient } from 'expo-linear-gradient';
 
 import { Text } from '../../src/components/Text';
 import { ProductCard } from '../../src/components/ProductCard';
@@ -75,18 +74,18 @@ export default function OrderTab() {
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[0]}
         ListHeaderComponent={
-          <View style={styles.header}>
-            <LinearGradient
-              colors={[color.primary, color.primaryPressed]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.brandBand, { paddingTop: insets.top + space.md }]}
-            >
-              <Text variant="display" tone="ink" style={styles.wordmark}>Aadya Dairy</Text>
+          <View style={styles.headerWrap}>
+            {/* Diagonal gradients need a real native library (a rebuild,
+                not an update) — this approximates the same warm orange
+                fade top-to-bottom using nothing but plain Views, so it's
+                safe to ship instantly and never risks the native-module
+                crash a half-linked gradient library caused before. */}
+            <GradientBackdrop />
+            <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
+              <Text variant="display" style={[styles.wordmark, styles.onGradientText]}>Aadya</Text>
               <Text
                 variant="caption"
-                tone="ink"
-                style={styles.tagline}
+                style={[styles.tagline, styles.onGradientTextMuted]}
                 numberOfLines={1}
                 onPress={() => {
                   if (location.status === 'denied' || location.status === 'error') {
@@ -97,20 +96,20 @@ export default function OrderTab() {
                 }}
               >
                 {location.status === 'found' && location.label
-                  ? `📍 ${location.label}`
+                  ? `📍 ${location.label} · 20–45 min`
                   : location.status === 'locating'
                     ? 'Finding your location…'
                     : location.status === 'denied'
                       ? 'Tap to set delivery address'
-                      : 'Pickles & Dairy'}
+                      : 'Pickles & Dairy · 20–45 min'}
               </Text>
-            </LinearGradient>
 
-            <View style={styles.searchWrap}>
-              <SearchBar value={search} onChangeText={setSearch} />
+              <View style={styles.searchWrap}>
+                <SearchBar value={search} onChangeText={setSearch} />
+              </View>
+
+              <CategoryRail categories={catalog.data.categories} selected={category} onSelect={setCategory} />
             </View>
-
-            <CategoryRail categories={catalog.data.categories} selected={category} onSelect={setCategory} />
           </View>
         }
         refreshControl={
@@ -137,17 +136,53 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: space.lg },
   gridRow: { gap: space.sm },
   gridItem: { flex: 1, marginBottom: space.sm },
-  header: {
-    backgroundColor: color.surface,
+  headerWrap: {
     marginHorizontal: -space.lg,
-    paddingBottom: space.xs,
+    position: 'relative',
+    overflow: 'hidden',
   },
-  brandBand: {
+  header: {
     paddingHorizontal: space.lg,
-    paddingBottom: space.md,
+    paddingBottom: space.xs,
   },
   wordmark: { fontSize: size.xxl },
   tagline: { fontFamily: font.bodyMedium, marginTop: 2 },
-  searchWrap: { marginTop: space.md, paddingHorizontal: space.lg },
+  onGradientText: { color: color.onPrimary },
+  onGradientTextMuted: { color: color.onPrimary, opacity: 0.85 },
+  searchWrap: { marginTop: space.md },
   empty: { textAlign: 'center', marginTop: space.xxl },
 });
+
+/**
+ * A top-to-bottom fade from `color.primary` into `color.primaryPressed`,
+ * built from plain stacked Views — deliberately not expo-linear-gradient.
+ * That package needs its native module compiled into the app, which only
+ * happens on a full `eas build`; shipping code that references it through
+ * `eas update` alone crashes the app on launch, since the JS bundle updates
+ * instantly but the native binary it's running inside does not. This reads
+ * as a smooth gradient with the two colours this close in hue, using
+ * nothing beyond core View/StyleSheet, so it can never hit that failure
+ * mode — no native module is ever referenced at all.
+ */
+function GradientBackdrop() {
+  const BANDS = 14;
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: color.primary }]} />
+      {Array.from({ length: BANDS }).map((_, i) => (
+        <View
+          key={i}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: `${(i / BANDS) * 100}%`,
+            height: `${100 / BANDS + 1}%`, // +1 avoids hairline seams between bands
+            backgroundColor: color.primaryPressed,
+            opacity: (i + 1) / BANDS,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
