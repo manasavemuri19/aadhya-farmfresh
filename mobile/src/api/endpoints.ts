@@ -23,6 +23,12 @@ export const authApi = {
   updateName: (name: string) => api.patch<UserProfile>('/auth/me', { name }),
   updatePhone: (phone: string) => api.patch<UserProfile>('/auth/me', { phone }),
   saveAddress: (address: Address) => api.put<void>('/auth/me/addresses', address),
+  // One request for all three — see the backend route's own comment for why
+  // this replaced three separate sequential calls. Prefer this over the
+  // individual methods above wherever more than one field changes at once;
+  // they're kept only for call sites that genuinely update just one thing.
+  updateProfile: (changes: { name?: string; phone?: string; address?: Address }) =>
+    api.patch<UserProfile>('/auth/me', changes),
 };
 
 export interface CreateOrderInput {

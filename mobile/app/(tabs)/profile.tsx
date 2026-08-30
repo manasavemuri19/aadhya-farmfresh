@@ -31,24 +31,26 @@ export default function ProfileTab() {
   const [saved, setSaved] = useState(false);
 
   const save = useMutation({
-    mutationFn: async () => {
-      const afterName = await authApi.updateName(name.trim());
-      const afterPhone = phone.trim() ? await authApi.updatePhone(phone.trim()) : afterName;
-      if (line1.trim().length >= 4 && /^\d{6}$/.test(pincode.trim())) {
-        const address: Address = {
-          label: 'Home',
-          line1: line1.trim(),
-          line2: '',
-          landmark: landmark.trim(),
-          city: 'Hyderabad',
-          pincode: pincode.trim(),
-          latitude: null,
-          longitude: null,
-        };
-        await authApi.saveAddress(address);
-        return { ...afterPhone, addresses: [address] };
-      }
-      return afterPhone;
+    mutationFn: () => {
+      const addressValid = line1.trim().length >= 4 && /^\d{6}$/.test(pincode.trim());
+      return authApi.updateProfile({
+        name: name.trim(),
+        ...(phone.trim() ? { phone: phone.trim() } : {}),
+        ...(addressValid
+          ? {
+              address: {
+                label: 'Home',
+                line1: line1.trim(),
+                line2: '',
+                landmark: landmark.trim(),
+                city: 'Hyderabad',
+                pincode: pincode.trim(),
+                latitude: null,
+                longitude: null,
+              } as Address,
+            }
+          : {}),
+      });
     },
     onSuccess: (profile) => {
       setUser(profile);

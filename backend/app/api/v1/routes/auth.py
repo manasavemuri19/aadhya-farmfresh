@@ -50,7 +50,21 @@ async def me(principal: CurrentUser, svc: AuthSvc) -> UserProfile:
 async def update_me(
     body: UpdateProfile, principal: CurrentUser, users: Users, svc: AuthSvc
 ) -> UserProfile:
-    await users.update_profile(principal.user_id, body.model_dump(exclude_none=True))
+    """Name, phone, and address all in one call — deliberately, not three.
+
+    This used to be three separate round trips from the app (name, then
+    phone, then address), fired back-to-back. On a shaky connection that is
+    three separate chances to fail, and if the third one failed the first
+    two had already committed — leaving an account with a saved name and
+    phone but no address, invisible until the next screen tried to use it.
+    One request, one transaction: either the whole profile update lands, or
+    none of it does.
+    """
+    changes = body.model_dump(exclude={"address"}, exclude_none=True)
+    if changes:
+        await users.update_profile(principal.user_id, changes)
+    if body.address is not None:
+        await users.upsert_address(principal.user_id, body.address.model_dump(mode="json"))
     return await svc.get_profile(principal.user_id)
 
 

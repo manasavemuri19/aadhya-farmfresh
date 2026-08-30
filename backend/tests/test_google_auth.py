@@ -111,3 +111,43 @@ async def test_no_configured_client_ids_refuses_rather_than_silently_accepting(
 
     with pytest.raises(Unauthorized):
         await auth.verify_google_and_login("fake-token")
+
+
+async def test_profile_update_is_visible_immediately_in_the_same_request(
+    auth, users, session,
+):
+    """Regression test for a real bug: update_profile and upsert_address both
+    mutate ORM objects in memory, and this session has autoflush off. A
+    request that saves a profile and then re-reads it to build its response
+    (exactly what /auth/me PATCH does) would otherwise see the database's
+    pre-update state — the save would look like it silently discarded the
+    address, even though it committed correctly at the end of the request.
+    """
+    with patch("app.services.auth_service.google_id_token.verify_oauth2_token", return_value=_claims()):
+        _, profile = await auth.verify_google_and_login("fake-token")
+
+    await users.update_profile(profile.id, {"name": "Real Name", "phone": "9876543210"})
+    await users.upsert_address(profile.id, {
+        "label": "Home", "line1": "12-3-45 Banjara Hills", "line2": "",
+        "landmark": "", "city": "Hyderabad", "pincode": "500034",
+        "latitude": None, "longitude": None,
+    })
+
+    # Same session, no new transaction — this is what the route handler does.
+    reread = await users.get_by_id(profile.id)
+
+    assert reread["name"] == "Real Name"
+    assert reread["phone"] == "9876543210"
+    assert len(reread["addresses"]) == 1
+    assert reread["addresses"][0]["line1"] == "12-3-45 Banjara Hills"
+
+
+async def test_updating_the_same_field_twice_reflects_the_latest_value(auth, users, session):
+    with patch("app.services.auth_service.google_id_token.verify_oauth2_token", return_value=_claims()):
+        _, profile = await auth.verify_google_and_login("fake-token")
+
+    await users.update_profile(profile.id, {"name": "First"})
+    await users.update_profile(profile.id, {"name": "Second"})
+
+    reread = await users.get_by_id(profile.id)
+    assert reread["name"] == "Second"

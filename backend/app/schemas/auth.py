@@ -80,6 +80,7 @@ class UserProfile(Schema):
 class UpdateProfile(Schema):
     name: str | None = Field(default=None, max_length=80)
     phone: str | None = Field(default=None, max_length=16)
+    address: Address | None = None
 
 
 class GoogleSignInRequest(Schema):

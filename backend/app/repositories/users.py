@@ -42,30 +42,31 @@ class UserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get_by_id(self, user_id: str) -> dict[str, Any] | None:
-        stmt = (
-            select(UserRow)
-            .options(selectinload(UserRow.addresses))
-            .where(UserRow.id == user_id)
+    def _loaded(self, stmt):
+        """Eager-load addresses and refresh anything already in the identity
+        map. Same reasoning as the equivalent helper in orders.py: a request
+        that both mutates a user (e.g. adding an address) and then reads it
+        back for the response would otherwise get a stale, pre-mutation
+        object from SQLAlchemy's identity map — the profile endpoint
+        genuinely returned an empty address list immediately after saving
+        one, confirmed live, until this was added.
+        """
+        return stmt.options(selectinload(UserRow.addresses)).execution_options(
+            populate_existing=True
         )
+
+    async def get_by_id(self, user_id: str) -> dict[str, Any] | None:
+        stmt = self._loaded(select(UserRow)).where(UserRow.id == user_id)
         row = (await self.session.execute(stmt)).scalars().first()
         return _to_dict(row) if row else None
 
     async def get_by_phone(self, phone: str) -> dict[str, Any] | None:
-        stmt = (
-            select(UserRow)
-            .options(selectinload(UserRow.addresses))
-            .where(UserRow.phone == phone)
-        )
+        stmt = self._loaded(select(UserRow)).where(UserRow.phone == phone)
         row = (await self.session.execute(stmt)).scalars().first()
         return _to_dict(row) if row else None
 
     async def get_by_google_sub(self, google_sub: str) -> dict[str, Any] | None:
-        stmt = (
-            select(UserRow)
-            .options(selectinload(UserRow.addresses))
-            .where(UserRow.google_sub == google_sub)
-        )
+        stmt = self._loaded(select(UserRow)).where(UserRow.google_sub == google_sub)
         row = (await self.session.execute(stmt)).scalars().first()
         return _to_dict(row) if row else None
 
@@ -126,6 +127,13 @@ class UserRepository:
             row.name = changes["name"]
         if changes.get("phone") is not None:
             row.phone = changes["phone"]
+        # Flushed, not just set on the in-memory object: this session has
+        # autoflush off, and update_me (auth.py) re-reads the profile via a
+        # fresh SELECT in the same request to build its response. Without an
+        # explicit flush here, that SELECT would see the database's
+        # pre-update row — the in-memory change would look "lost" in the
+        # response even though it commits fine at the end of the request.
+        await self.session.flush()
 
     async def upsert_address(self, user_id: str, address: dict[str, Any]) -> None:
         """Replace the address with the same label, otherwise add it."""
@@ -135,6 +143,7 @@ class UserRepository:
         row = (await self.session.execute(stmt)).scalars().first()
         if row is None:
             self.session.add(AddressRow(user_id=user_id, **address))
-            return
-        for field, value in address.items():
-            setattr(row, field, value)
+        else:
+            for field, value in address.items():
+                setattr(row, field, value)
+        await self.session.flush()
