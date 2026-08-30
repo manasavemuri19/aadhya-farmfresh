@@ -62,7 +62,6 @@ export default function CartScreen() {
   }
 
   const data: Quote = quote.data;
-  const shortfall = data.free_delivery_threshold_paise - data.subtotal_paise;
 
   return (
     <View style={styles.screen}>
@@ -109,19 +108,11 @@ export default function CartScreen() {
             label="Delivery"
             value={data.delivery_fee_paise === 0 ? 'Free' : formatPaise(data.delivery_fee_paise)}
           />
-          {shortfall > 0 && (
-            <Text style={styles.nudge}>
-              Add {formatPaise(shortfall)} more for free delivery
-            </Text>
-          )}
           <View style={styles.divider} />
           <View style={styles.totalRow}>
             <Text variant="label" style={styles.totalLabel}>Total</Text>
             <Text style={styles.totalValue}>{formatPaise(data.total_paise)}</Text>
           </View>
-          <Text variant="caption" style={styles.eta}>
-            Arriving in about {data.eta_minutes} minutes
-          </Text>
         </View>
       </ScrollView>
 
@@ -176,12 +167,10 @@ const styles = StyleSheet.create({
   },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   summaryValue: { color: color.ink },
-  nudge: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.leaf },
   divider: { height: 1, backgroundColor: color.line, marginVertical: space.xs },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalLabel: { fontSize: size.md },
   totalValue: { fontFamily: font.monoBold, fontSize: size.lg, color: color.ink },
-  eta: { color: color.leaf },
   footer: {
     padding: space.lg,
     borderTopWidth: 1,
