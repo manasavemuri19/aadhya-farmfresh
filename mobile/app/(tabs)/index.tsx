@@ -3,6 +3,7 @@ import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { Text } from '../../src/components/Text';
 import { ProductCard } from '../../src/components/ProductCard';
@@ -75,7 +76,12 @@ export default function OrderTab() {
         stickyHeaderIndices={[0]}
         ListHeaderComponent={
           <View style={styles.header}>
-            <View style={[styles.brandBand, { paddingTop: insets.top + space.md }]}>
+            <LinearGradient
+              colors={[color.primary, color.primaryPressed]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.brandBand, { paddingTop: insets.top + space.md }]}
+            >
               <Text variant="display" tone="ink" style={styles.wordmark}>Aadya Dairy</Text>
               <Text
                 variant="caption"
@@ -98,7 +104,7 @@ export default function OrderTab() {
                       ? 'Tap to set delivery address'
                       : 'Pickles & Dairy'}
               </Text>
-            </View>
+            </LinearGradient>
 
             <View style={styles.searchWrap}>
               <SearchBar value={search} onChangeText={setSearch} />
@@ -137,7 +143,6 @@ const styles = StyleSheet.create({
     paddingBottom: space.xs,
   },
   brandBand: {
-    backgroundColor: color.primary,
     paddingHorizontal: space.lg,
     paddingBottom: space.md,
   },

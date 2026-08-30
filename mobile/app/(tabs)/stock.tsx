@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Text } from '../../src/components/Text';
@@ -17,6 +18,7 @@ import type { AdminProduct, AdminVariant } from '../../src/api/types';
  * screen being reachable is never itself the security boundary.
  */
 export default function StockAdminScreen() {
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const products = useQuery({ queryKey: ['admin-products'], queryFn: () => adminApi.listProducts() });
   const [drafts, setDrafts] = useState<Record<string, { price?: string; stock?: string }>>({});
@@ -67,12 +69,7 @@ export default function StockAdminScreen() {
       style={styles.screen}
       data={rows}
       keyExtractor={(v) => v.sku}
-      contentContainerStyle={styles.list}
-      ListHeaderComponent={
-        <Text variant="title" style={styles.heading}>
-          {rows.length} SKUs · tap a field, type a new value, tap Save
-        </Text>
-      }
+      contentContainerStyle={[styles.list, { paddingTop: insets.top + space.md }]}
       renderItem={({ item }) => {
         const draft = drafts[item.sku] ?? {};
         const dirty = Boolean(draft.price || draft.stock);
@@ -132,7 +129,6 @@ export default function StockAdminScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   list: { padding: space.lg, gap: space.sm },
-  heading: { fontSize: size.base, marginBottom: space.sm },
   row: {
     backgroundColor: color.card, borderRadius: radius.md, padding: space.md,
     gap: space.xs, marginBottom: space.sm,
