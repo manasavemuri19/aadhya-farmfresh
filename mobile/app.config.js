@@ -31,12 +31,34 @@ const API_BASE_URL =
   'https://aadhya-farmfresh-production.up.railway.app/v1';
 
 // Google OAuth client IDs — same "read at config-eval time, safe default"
-// approach as API_BASE_URL above. Empty string (not a fake placeholder) is
-// the deliberate default: an empty client ID makes Google's own SDK fail
-// immediately and obviously ("invalid_client") rather than pretend to work
-// and fail confusingly deeper in the flow.
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+// approach as API_BASE_URL above.
+//
+// These USED to default to '' when the env var was unset, on the theory
+// that an empty client ID makes Google's SDK fail immediately and
+// obviously. In practice that default is exactly what silently ships on
+// every `eas update` run from a shell that hasn't exported these vars
+// (see the note above: `eas update` does not read eas.json's build.*.env)
+// — which is indistinguishable from "sign-in is broken" to anyone using
+// the app. Falling back to the real production client IDs, sourced
+// straight from eas.json's production profile, removes that failure mode
+// the same way the API_BASE_URL fallback does above.
+const easBuildEnv = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('./eas.json')?.build?.production?.env ?? {};
+  } catch {
+    return {};
+  }
+})();
+
+const GOOGLE_WEB_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
+  easBuildEnv.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
+  '';
+const GOOGLE_ANDROID_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ??
+  easBuildEnv.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ??
+  '';
 
 module.exports = {
   expo: {
