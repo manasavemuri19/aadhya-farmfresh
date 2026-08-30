@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Text } from '../src/components/Text';
 import { Button } from '../src/components/Button';
-import { ErrorState, Loading } from '../src/components/Feedback';
+import { Loading, ErrorState } from '../src/components/Feedback';
 import { ordersApi, paymentsApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
@@ -13,21 +13,31 @@ import { color, font, radius, size, space } from '../src/theme/tokens';
 /**
  * Two real paths, chosen by `order.payment.provider`:
  *
- *  - "razorpay": opens the actual Razorpay-hosted Payment Link in the
- *    device's browser via the plain `Linking` API — nothing native to add,
- *    so this ships and updates over `eas update`, not a rebuild. Razorpay
+ *  - "razorpay": opens Razorpay's hosted Payment Link automatically, the
+ *    instant it's available — no manual "Pay now" tap required. This screen
+ *    is a brief transit stop, not a destination: on arrival it immediately
+ *    hands off to the device browser via `Linking.openURL`, nothing
+ *    native to add, so this ships and updates over `eas update`. Razorpay
  *    redirects back to this app's own `aadhya://payment-callback` scheme
- *    once the customer pays, landing on app/payment-callback.tsx.
+ *    once the customer pays, landing on app/payment-callback.tsx. A manual
+ *    button stays as a fallback only, for the rare case the automatic
+ *    handoff doesn't fire (e.g. the browser blocked the auto-open).
  *
  *  - "mock": no gateway account exists behind this provider, so there is no
  *    real page to send anyone to — these buttons stand in for what would
  *    otherwise be "the customer completed checkout on Razorpay's page."
+ *
+ * No transform/rotation styling exists anywhere in this file — if text
+ * still renders flipped after replacing it with this exact file, the cause
+ * is upstream of this screen (a shared component, a global style, or a
+ * device-level RTL setting), not this code.
  */
 export default function PaymentScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [failed, setFailed] = useState(false);
+  const autoOpened = useRef(false);
 
   const order = useQuery({
     queryKey: ['order', orderId],
@@ -50,6 +60,20 @@ export default function PaymentScreen() {
     },
   });
 
+  const shortUrl = order.data?.payment.checkout_payload?.short_url as string | undefined;
+  const isRealProvider = order.data?.payment.provider === 'razorpay';
+
+  // Fires once, the moment the payment link is ready — this is what removes
+  // the extra manual tap. Guarded by a ref, not just state, so React's
+  // render-twice-in-dev behaviour and the polling refetch above can never
+  // reopen the browser a second time for the same order.
+  useEffect(() => {
+    if (isRealProvider && shortUrl && !autoOpened.current) {
+      autoOpened.current = true;
+      void Linking.openURL(shortUrl);
+    }
+  }, [isRealProvider, shortUrl]);
+
   if (order.isPending) return <Loading label="Preparing payment" />;
   if (order.isError || !order.data) {
     return <ErrorState message="Could not load this order." onRetry={() => void order.refetch()} />;
@@ -63,9 +87,6 @@ export default function PaymentScreen() {
     router.replace(`/order/${orderId}`);
     return null;
   }
-
-  const shortUrl = order.data.payment.checkout_payload?.short_url as string | undefined;
-  const isRealProvider = order.data.payment.provider === 'razorpay';
 
   return (
     <View style={styles.screen}>
@@ -84,14 +105,17 @@ export default function PaymentScreen() {
 
       {isRealProvider ? (
         <>
+          <Text variant="caption" style={styles.note}>
+            Opening Razorpay's secure payment page…
+          </Text>
           <Button
-            label="Pay now"
+            label="Open payment page"
+            variant="secondary"
             disabled={!shortUrl}
             onPress={() => shortUrl && Linking.openURL(shortUrl)}
           />
           <Text variant="caption" style={styles.note}>
-            Opens Razorpay's secure payment page. You'll be brought back here
-            automatically once it's done.
+            Didn't open automatically? Tap the button above.
           </Text>
         </>
       ) : (
