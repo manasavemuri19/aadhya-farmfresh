@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import { authApi } from '../api/endpoints';
 import { tokenStore } from './tokenStore';
+import { signOutOfGoogle } from '../lib/googleAuth';
 import type { UserProfile } from '../api/types';
 
 interface SessionState {
@@ -33,7 +34,12 @@ export const useSession = create<SessionState>((set) => ({
     try {
       set({ user: await authApi.me(), status: 'signed_in' });
     } catch {
-      await tokenStore.clear();
+      // The stored app token is invalid or was revoked server-side. Clear
+      // the native Google session too, not just our own — otherwise the
+      // person lands back on the login screen but the next "Continue with
+      // Google" silently re-authenticates as the same (rejected) account
+      // instead of letting them pick a different one.
+      await Promise.all([tokenStore.clear(), signOutOfGoogle()]);
       set({ status: 'signed_out', user: null });
     }
   },
@@ -41,7 +47,7 @@ export const useSession = create<SessionState>((set) => ({
   setUser: (user) => set({ user, status: 'signed_in' }),
 
   signOut: async () => {
-    await tokenStore.clear();
+    await Promise.all([tokenStore.clear(), signOutOfGoogle()]);
     set({ user: null, status: 'signed_out' });
   },
 }));
