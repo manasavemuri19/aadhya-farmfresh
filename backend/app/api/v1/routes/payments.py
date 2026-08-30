@@ -4,6 +4,8 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
 
 from app.api.deps import CurrentUser, get_order_repo, get_order_service
 from app.core.config import settings
@@ -140,6 +142,24 @@ async def mock_complete_payment(
         await svc.apply_webhook(event)
 
     return await svc.get_for_user(order_id, principal.user_id)
+
+
+@router.get("/link-redirect", include_in_schema=False)
+async def link_redirect(request: Request) -> RedirectResponse:
+    """The actual `callback_url` given to Razorpay's Payment Links API.
+
+    Razorpay's Payment Links validate `callback_url` as a real `https://`
+    address and reject a custom app scheme outright — confirmed against
+    the live API ("callback_url: URL should be sent in callback_url
+    field"), not assumed. So Razorpay redirects the phone's browser here
+    first, and this single hop does nothing except immediately bounce it
+    into the app's real destination, `aadhya://payment-callback`, carrying
+    every query parameter Razorpay attached forward unchanged. The app
+    itself never talks to this route directly — it only ever sees the
+    `aadhya://` redirect this produces.
+    """
+    query = urlencode(dict(request.query_params))
+    return RedirectResponse(url=f"aadhya://payment-callback?{query}", status_code=302)
 
 
 @router.get("/link-callback", response_model=OrderView)

@@ -58,7 +58,13 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str = ""
     # The app's own deep-link URL that Razorpay redirects the browser back to
     # once a Payment Link is paid. Matches the scheme in mobile/app.config.js.
-    razorpay_callback_url: str = "aadhya://payment-callback"
+    # Must be a real https:// URL — Razorpay's Payment Links API rejects a
+    # custom app scheme (aadhya://...) outright with "URL should be sent in
+    # callback_url field", confirmed against the live API, not assumed.
+    # This points at our own backend instead, which immediately 302-redirects
+    # the browser into the app's actual aadhya://payment-callback scheme —
+    # see the /payments/link-redirect route for that hop.
+    razorpay_callback_url: str = "https://aadhya-farmfresh-production.up.railway.app/v1/payments/link-redirect"
 
     # Store rules — all money is in the smallest currency unit (paise).
     currency: str = "INR"
