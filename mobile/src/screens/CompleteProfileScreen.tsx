@@ -36,9 +36,7 @@ export function CompleteProfileScreen() {
   const canSave = nameValid && phoneValid && addressValid;
 
   const save = useMutation({
-    mutationFn: async () => {
-      const afterName = await authApi.updateName(name.trim());
-      const afterPhone = await authApi.updatePhone(phone.trim());
+    mutationFn: () => {
       const address: Address = {
         label: 'Home',
         line1: line1.trim(),
@@ -49,8 +47,7 @@ export function CompleteProfileScreen() {
         latitude: null,
         longitude: null,
       };
-      await authApi.saveAddress(address);
-      return { ...afterName, ...afterPhone, addresses: [address] };
+      return authApi.updateProfile({ name: name.trim(), phone: phone.trim(), address });
     },
     onSuccess: (profile) => setUser(profile),
   });
