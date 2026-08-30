@@ -75,17 +75,19 @@ export default function OrderTab() {
         stickyHeaderIndices={[0]}
         ListHeaderComponent={
           <View style={styles.headerWrap}>
-            {/* Diagonal gradients need a real native library (a rebuild,
-                not an update) — this approximates the same warm orange
-                fade top-to-bottom using nothing but plain Views, so it's
-                safe to ship instantly and never risks the native-module
-                crash a half-linked gradient library caused before. */}
-            <GradientBackdrop />
-            <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
-              <Text variant="display" style={[styles.wordmark, styles.onGradientText]}>Aadya</Text>
+            <View style={[styles.orangeZone, { paddingTop: insets.top + space.md }]}>
+              {/* Diagonal gradients need a real native library (a rebuild,
+                  not an update) — this approximates the same warm orange
+                  fade top-to-bottom using nothing but plain Views, so it's
+                  safe to ship instantly and never risks the native-module
+                  crash a half-linked gradient library caused before. Scoped
+                  to just this zone, not the search bar or category rail
+                  below it. */}
+              <GradientBackdrop />
+              <Text variant="display" style={styles.wordmark}>Aadya Dairy</Text>
               <Text
                 variant="caption"
-                style={[styles.tagline, styles.onGradientTextMuted]}
+                style={styles.tagline}
                 numberOfLines={1}
                 onPress={() => {
                   if (location.status === 'denied' || location.status === 'error') {
@@ -103,7 +105,9 @@ export default function OrderTab() {
                       ? 'Tap to set delivery address'
                       : 'Pickles & Dairy · 20–45 min'}
               </Text>
+            </View>
 
+            <View style={styles.plainZone}>
               <View style={styles.searchWrap}>
                 <SearchBar value={search} onChangeText={setSearch} />
               </View>
@@ -138,34 +142,37 @@ const styles = StyleSheet.create({
   gridItem: { flex: 1, marginBottom: space.sm },
   headerWrap: {
     marginHorizontal: -space.lg,
+  },
+  orangeZone: {
     position: 'relative',
     overflow: 'hidden',
+    paddingHorizontal: space.lg,
+    paddingBottom: space.md,
   },
-  header: {
+  plainZone: {
+    backgroundColor: color.surface,
     paddingHorizontal: space.lg,
     paddingBottom: space.xs,
   },
   wordmark: { fontSize: size.xxl },
   tagline: { fontFamily: font.bodyMedium, marginTop: 2 },
-  onGradientText: { color: color.onPrimary },
-  onGradientTextMuted: { color: color.onPrimary, opacity: 0.85 },
   searchWrap: { marginTop: space.md },
   empty: { textAlign: 'center', marginTop: space.xxl },
 });
 
 /**
- * A top-to-bottom fade from `color.primary` into `color.primaryPressed`,
+ * A soft top-to-bottom fade from `color.primary` into `color.primaryPressed`,
  * built from plain stacked Views — deliberately not expo-linear-gradient.
  * That package needs its native module compiled into the app, which only
  * happens on a full `eas build`; shipping code that references it through
  * `eas update` alone crashes the app on launch, since the JS bundle updates
- * instantly but the native binary it's running inside does not. This reads
- * as a smooth gradient with the two colours this close in hue, using
- * nothing beyond core View/StyleSheet, so it can never hit that failure
- * mode — no native module is ever referenced at all.
+ * instantly but the native binary it's running inside does not. Capped at
+ * 80% opacity at its darkest (not fully opaque primaryPressed) so the fade
+ * stays gentle rather than ending in a hard, saturated block of colour.
  */
 function GradientBackdrop() {
   const BANDS = 14;
+  const MAX_OPACITY = 0.8;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[StyleSheet.absoluteFill, { backgroundColor: color.primary }]} />
@@ -179,7 +186,7 @@ function GradientBackdrop() {
             top: `${(i / BANDS) * 100}%`,
             height: `${100 / BANDS + 1}%`, // +1 avoids hairline seams between bands
             backgroundColor: color.primaryPressed,
-            opacity: (i + 1) / BANDS,
+            opacity: ((i + 1) / BANDS) * MAX_OPACITY,
           }}
         />
       ))}
