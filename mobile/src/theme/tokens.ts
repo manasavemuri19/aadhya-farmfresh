@@ -16,7 +16,7 @@ export const color = {
   card: '#FFFDF9',       // cards — warm white, not clinical white
 
   // Ink
-  ink: '#2C2013',        // headings — dark roasted brown, not black
+  ink: '#FBEDEA' , //'2C2013',        // headings — dark roasted brown, not black
   body: '#5A4C3C',       // body text
   muted: '#9A8B78',      // captions, secondary
   line: '#E6DAC7',       // hairlines, borders
