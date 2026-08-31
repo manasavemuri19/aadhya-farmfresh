@@ -64,6 +64,17 @@ export const paymentsApi = {
     api.get<OrderView>(`/payments/link-callback?${new URLSearchParams(params).toString()}`, true),
 };
 
+export interface SupportTicketCreated { id: string; created_at: string }
+
+export const supportApi = {
+  submitTicket: (message: string, contextNodeId: string | null) =>
+    api.post<SupportTicketCreated>(
+      '/support/tickets',
+      { message, context_node_id: contextNodeId },
+      { auth: true },
+    ),
+};
+
 export const adminApi = {
   listProducts: () => api.get<AdminProduct[]>('/admin/products', true),
   setStock: (sku: string, setQty: number) =>

@@ -24,10 +24,12 @@ from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.otp import OtpRepository
 from app.repositories.products import ProductRepository
+from app.repositories.support import SupportRepository
 from app.repositories.users import UserRepository
 from app.services.auth_service import AuthService
 from app.services.catalog_service import CatalogService
 from app.services.order_service import OrderService
+from app.services.support_service import SupportService
 
 
 async def db_session() -> AsyncIterator[AsyncSession]:
@@ -71,6 +73,10 @@ def get_idempotency_repo(db: DB) -> IdempotencyRepository:
     return IdempotencyRepository(db)
 
 
+def get_support_repo(db: DB) -> SupportRepository:
+    return SupportRepository(db)
+
+
 def get_auth_service(
     users: Annotated[UserRepository, Depends(get_user_repo)],
     otps: Annotated[OtpRepository, Depends(get_otp_repo)],
@@ -91,6 +97,12 @@ def get_order_service(
     payments: Annotated[PaymentProvider, Depends(get_payment_provider)],
 ) -> OrderService:
     return OrderService(products, orders, idem, payments)
+
+
+def get_support_service(
+    tickets: Annotated[SupportRepository, Depends(get_support_repo)],
+) -> SupportService:
+    return SupportService(tickets)
 
 
 class Principal:
