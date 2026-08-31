@@ -111,6 +111,22 @@ class DeliveryRepository:
         ).scalars().first()
         return _to_dict(row) if row else None
 
+    async def get_one(self, order_id: str, agent_id: str) -> dict[str, Any] | None:
+        """This order, as this agent's own view of it — but only if it's
+        actually assigned to them. Returning None otherwise isn't just a
+        lookup detail: it's the authorization check `DeliveryService.
+        update_status` relies on before letting an agent touch an order's
+        status at all, so an agent can never advance the status of a job
+        that isn't theirs, however they got the order id.
+        """
+        stmt = (
+            select(OrderRow)
+            .options(selectinload(OrderRow.lines))
+            .where(OrderRow.id == order_id, OrderRow.delivery_agent_id == agent_id)
+        )
+        row = (await self.session.execute(stmt)).scalars().first()
+        return _to_dict(row) if row else None
+
     async def release(self, order_id: str, agent_id: str) -> bool:
         """The mirror image of `accept`: only the agent currently holding the
         order can let it go, and only while it's still just-confirmed.
