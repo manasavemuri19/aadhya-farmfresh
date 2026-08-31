@@ -1,11 +1,12 @@
-import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { useEffect, useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
 import { useMutation } from '@tanstack/react-query';
 
 import { Text } from '../src/components/Text';
 import { Button } from '../src/components/Button';
 import { authApi } from '../src/api/endpoints';
 import { useSession } from '../src/store/session';
+import { useLocationStore } from '../src/store/location';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { Address } from '../src/api/types';
 
@@ -16,6 +17,7 @@ import type { Address } from '../src/api/types';
  */
 export default function EditDetailsScreen() {
   const { user, setUser } = useSession();
+  const deviceLocation = useLocationStore();
 
   const existing = user?.addresses?.[0];
   const [name, setName] = useState(user?.name ?? '');
@@ -23,7 +25,45 @@ export default function EditDetailsScreen() {
   const [line1, setLine1] = useState(existing?.line1 ?? '');
   const [landmark, setLandmark] = useState(existing?.landmark ?? '');
   const [pincode, setPincode] = useState(existing?.pincode ?? '');
+  // Starts from whatever the saved address already has (if any). Cleared
+  // the moment the person hand-edits line1/pincode below, same reasoning
+  // as checkout.tsx: stale coordinates describing the wrong place are
+  // worse than none at all.
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(
+    existing?.latitude != null && existing?.longitude != null
+      ? { latitude: existing.latitude, longitude: existing.longitude }
+      : null,
+  );
   const [saved, setSaved] = useState(false);
+
+  const useCurrentLocation = () => {
+    if (deviceLocation.status === 'found' && deviceLocation.line1) {
+      setLine1(deviceLocation.line1);
+      if (deviceLocation.pincode) setPincode(deviceLocation.pincode);
+      if (deviceLocation.latitude != null && deviceLocation.longitude != null) {
+        setCoords({ latitude: deviceLocation.latitude, longitude: deviceLocation.longitude });
+      }
+      setSaved(false);
+    } else {
+      void deviceLocation.request();
+    }
+  };
+
+  // First tap only requests permission; if it resolves after that, apply it
+  // as soon as it lands rather than making the person tap again.
+  useEffect(() => {
+    if (
+      deviceLocation.status === 'found' && deviceLocation.line1 &&
+      line1.trim().length === 0
+    ) {
+      setLine1(deviceLocation.line1);
+      if (deviceLocation.pincode) setPincode(deviceLocation.pincode);
+      if (deviceLocation.latitude != null && deviceLocation.longitude != null) {
+        setCoords({ latitude: deviceLocation.latitude, longitude: deviceLocation.longitude });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceLocation.status]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -40,8 +80,8 @@ export default function EditDetailsScreen() {
                 landmark: landmark.trim(),
                 city: 'Hyderabad',
                 pincode: pincode.trim(),
-                latitude: null,
-                longitude: null,
+                latitude: coords?.latitude ?? null,
+                longitude: coords?.longitude ?? null,
               } as Address,
             }
           : {}),
@@ -80,9 +120,18 @@ export default function EditDetailsScreen() {
         />
 
         <Text variant="label" style={styles.sectionLabel}>Delivery address</Text>
+        <Pressable
+          onPress={useCurrentLocation}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
+        >
+          <Text style={styles.locationButtonText}>
+            {deviceLocation.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+          </Text>
+        </Pressable>
         <TextInput
           value={line1}
-          onChangeText={(t) => { setLine1(t); setSaved(false); }}
+          onChangeText={(t) => { setLine1(t); setCoords(null); setSaved(false); }}
           placeholder="Flat, building and street"
           placeholderTextColor={color.muted}
           style={styles.input}
@@ -98,7 +147,7 @@ export default function EditDetailsScreen() {
         />
         <TextInput
           value={pincode}
-          onChangeText={(t) => { setPincode(t); setSaved(false); }}
+          onChangeText={(t) => { setPincode(t); setCoords(null); setSaved(false); }}
           placeholder="Pincode"
           placeholderTextColor={color.muted}
           style={styles.input}
@@ -130,6 +179,18 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { padding: space.lg, gap: space.sm, paddingBottom: space.xxl },
   sectionLabel: { marginTop: space.md, marginBottom: space.xs, fontSize: size.base },
+  locationButton: {
+    backgroundColor: color.leafSoft,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.leaf,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    alignItems: 'center',
+    marginBottom: space.xs,
+  },
+  locationButtonPressed: { opacity: 0.8 },
+  locationButtonText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
   input: {
     backgroundColor: color.card,
     borderRadius: radius.md,

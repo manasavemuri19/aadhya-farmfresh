@@ -7,6 +7,10 @@ class Role(StrEnum):
     CUSTOMER = "customer"
     STAFF = "staff"       # farm counter: manages stock and fulfils orders
     ADMIN = "admin"       # owner: everything, including refunds
+    # Not self-serve — assigned the same way STAFF/ADMIN are (directly on the
+    # user row), never chosen at signup. A delivery agent's app is otherwise
+    # a completely separate 2-tab experience; see app/(tabs)/_layout.tsx.
+    DELIVERY_AGENT = "delivery_agent"
 
 
 class OrderStatus(StrEnum):

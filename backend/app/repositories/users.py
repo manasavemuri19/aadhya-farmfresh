@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -147,3 +147,22 @@ class UserRepository:
             for field, value in address.items():
                 setattr(row, field, value)
         await self.session.flush()
+
+    # ---------- delivery agent location ----------
+    # Isolated here rather than in a delivery-specific repository since these
+    # columns live on `users`, same as everything else this repo touches.
+
+    async def get_agent_location(
+        self, user_id: str
+    ) -> tuple[float, float] | None:
+        row = await self.session.get(UserRow, user_id)
+        if row is None or row.last_lat is None or row.last_lng is None:
+            return None
+        return (row.last_lat, row.last_lng)
+
+    async def update_agent_location(self, user_id: str, *, latitude: float, longitude: float) -> None:
+        await self.session.execute(
+            update(UserRow)
+            .where(UserRow.id == user_id)
+            .values(last_lat=latitude, last_lng=longitude, last_location_at=datetime.now(UTC))
+        )

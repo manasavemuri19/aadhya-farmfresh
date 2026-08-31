@@ -74,6 +74,14 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(16), default="customer", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Only meaningful for role == "delivery_agent": where the delivery app
+    # last reported the device's GPS position, used to match nearby order
+    # requests. Null until the agent's Requests tab has been opened at
+    # least once and location permission granted.
+    last_lat: Mapped[float | None] = mapped_column(Float)
+    last_lng: Mapped[float | None] = mapped_column(Float)
+    last_location_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     addresses: Mapped[list[Address]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -182,6 +190,7 @@ class Order(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_order_user_created", "user_id", "created_at"),
         Index("ix_order_status_created", "status", "created_at"),
+        Index("ix_order_delivery_agent", "delivery_agent_id"),
         CheckConstraint("total_paise >= 0", name="ck_order_total_non_negative"),
     )
 
@@ -208,6 +217,15 @@ class Order(Base, TimestampMixin):
     stock_released: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     hold_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_reason: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+
+    # Who is delivering it, set the moment a delivery agent accepts the
+    # request — independent of `status`, which staff still drive through
+    # packed/out_for_delivery/delivered on their own schedule. NULL means
+    # "not yet accepted by anyone."
+    delivery_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    delivery_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     lines: Mapped[list[OrderLine]] = relationship(
         back_populates="order", cascade="all, delete-orphan", lazy="selectin"

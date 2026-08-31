@@ -20,6 +20,7 @@ from app.core.security import decode_token
 from app.db.base import get_session_factory
 from app.domain.enums import Role
 from app.payments import PaymentProvider, get_payment_provider
+from app.repositories.delivery import DeliveryRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.otp import OtpRepository
@@ -28,6 +29,7 @@ from app.repositories.support import SupportRepository
 from app.repositories.users import UserRepository
 from app.services.auth_service import AuthService
 from app.services.catalog_service import CatalogService
+from app.services.delivery_service import DeliveryService
 from app.services.order_service import OrderService
 from app.services.support_service import SupportService
 
@@ -77,6 +79,10 @@ def get_support_repo(db: DB) -> SupportRepository:
     return SupportRepository(db)
 
 
+def get_delivery_repo(db: DB) -> DeliveryRepository:
+    return DeliveryRepository(db)
+
+
 def get_auth_service(
     users: Annotated[UserRepository, Depends(get_user_repo)],
     otps: Annotated[OtpRepository, Depends(get_otp_repo)],
@@ -105,6 +111,13 @@ def get_support_service(
     return SupportService(tickets)
 
 
+def get_delivery_service(
+    deliveries: Annotated[DeliveryRepository, Depends(get_delivery_repo)],
+    users: Annotated[UserRepository, Depends(get_user_repo)],
+) -> DeliveryService:
+    return DeliveryService(deliveries, users)
+
+
 class Principal:
     """The authenticated caller."""
 
@@ -121,6 +134,10 @@ class Principal:
     @property
     def is_admin(self) -> bool:
         return self.role == Role.ADMIN.value
+
+    @property
+    def is_delivery_agent(self) -> bool:
+        return self.role == Role.DELIVERY_AGENT.value
 
 
 async def current_user(
@@ -151,8 +168,15 @@ async def require_admin(principal: CurrentUser) -> Principal:
     return principal
 
 
+async def require_delivery_agent(principal: CurrentUser) -> Principal:
+    if not principal.is_delivery_agent:
+        raise Forbidden("This area is for delivery agents.")
+    return principal
+
+
 StaffUser = Annotated[Principal, Depends(require_staff)]
 AdminUser = Annotated[Principal, Depends(require_admin)]
+DeliveryAgentUser = Annotated[Principal, Depends(require_delivery_agent)]
 
 
 async def idempotency_key(

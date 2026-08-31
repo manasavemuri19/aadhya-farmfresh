@@ -38,6 +38,11 @@ export default function CheckoutScreen() {
   const [notes, setNotes] = useState('');
   const [method, setMethod] = useState<PaymentMethod>('online');
   const [prefilled, setPrefilled] = useState(false);
+  // Tracks whichever source last filled the address text fields, so the
+  // order actually carries real coordinates instead of always submitting
+  // null — the two effects below are what set this, mirroring exactly
+  // which fields they set alongside.
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const user = useSession((s) => s.user);
   const location = useLocationStore();
@@ -52,6 +57,9 @@ export default function CheckoutScreen() {
       setLine1(saved.line1);
       setLandmark(saved.landmark ?? '');
       setPincode(saved.pincode ?? '');
+      if (saved.latitude != null && saved.longitude != null) {
+        setCoords({ latitude: saved.latitude, longitude: saved.longitude });
+      }
       setPrefilled(true);
     }
   }, [user, prefilled]);
@@ -60,6 +68,9 @@ export default function CheckoutScreen() {
     if (location.status === 'found' && location.line1) {
       setLine1(location.line1);
       if (location.pincode) setPincode(location.pincode);
+      if (location.latitude != null && location.longitude != null) {
+        setCoords({ latitude: location.latitude, longitude: location.longitude });
+      }
       setPrefilled(true);
     } else {
       void location.request();
@@ -72,6 +83,9 @@ export default function CheckoutScreen() {
     if (location.status === 'found' && location.line1 && line1.trim().length === 0) {
       setLine1(location.line1);
       if (location.pincode) setPincode(location.pincode);
+      if (location.latitude != null && location.longitude != null) {
+        setCoords({ latitude: location.latitude, longitude: location.longitude });
+      }
     }
   }, [location.status]);
 
@@ -92,8 +106,8 @@ export default function CheckoutScreen() {
         landmark: landmark.trim(),
         city: 'Hyderabad',
         pincode: pincode.trim(),
-        latitude: null,
-        longitude: null,
+        latitude: coords?.latitude ?? null,
+        longitude: coords?.longitude ?? null,
       };
       return ordersApi.create(
         {
@@ -159,7 +173,7 @@ export default function CheckoutScreen() {
         <Field
           label="Flat, building and street"
           value={line1}
-          onChangeText={setLine1}
+          onChangeText={(t) => { setLine1(t); setCoords(null); }}
           placeholder="12-3-45, Rose Villa, Banjara Hills"
           autoComplete="street-address"
         />
@@ -172,7 +186,7 @@ export default function CheckoutScreen() {
         <Field
           label="Pincode"
           value={pincode}
-          onChangeText={setPincode}
+          onChangeText={(t) => { setPincode(t); setCoords(null); }}
           placeholder="500034"
           keyboardType="number-pad"
           maxLength={6}
