@@ -1,4 +1,4 @@
-"""The delivery agent's entire API surface: two lists and one action."""
+"""The delivery agent's API surface: two lists, and the actions on a request."""
 
 from __future__ import annotations
 
@@ -30,6 +30,15 @@ async def accept_request(
     order_id: str, agent: DeliveryAgentUser, svc: Delivery
 ) -> DeliveryOrderView:
     return await svc.accept(order_id, agent.user_id)
+
+
+@router.post("/orders/{order_id}/release", status_code=204)
+async def release_request(
+    order_id: str, agent: DeliveryAgentUser, svc: Delivery
+) -> None:
+    """The agent backs out after accepting — the order goes back into
+    `/delivery/requests` for anyone else to pick up (see DeliveryService.release)."""
+    await svc.release(order_id, agent.user_id)
 
 
 @router.post("/location", status_code=204)

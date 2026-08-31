@@ -47,6 +47,11 @@ export const ordersApi = {
   get: (id: string) => api.get<OrderView>(`/orders/${id}`, true),
   cancel: (id: string, reason: string) =>
     api.post<OrderView>(`/orders/${id}/cancel`, { reason }, { auth: true }),
+  // Only accepted while the order is still can_edit_address — the backend
+  // enforces the same window it uses for can_cancel, so this can 403 if the
+  // order moved past it between the screen loading and the save.
+  updateAddress: (id: string, address: Address) =>
+    api.patch<OrderView>(`/orders/${id}/address`, { address }),
 };
 
 export const paymentsApi = {
@@ -99,6 +104,11 @@ export const deliveryApi = {
   // that's surfaced (not a validation error, just "it's gone now").
   accept: (orderId: string) =>
     api.post<DeliveryOrderView>(`/delivery/orders/${orderId}/accept`, undefined, { auth: true }),
+  // Backs out of an order this agent already accepted, sending it back to
+  // the pool for someone else — only works while it's still just-confirmed
+  // (see DeliveryRepository.release on the backend for exactly why).
+  release: (orderId: string) =>
+    api.post<void>(`/delivery/orders/${orderId}/release`, undefined, { auth: true }),
   reportLocation: (latitude: number, longitude: number) =>
     api.post<void>('/delivery/location', { latitude, longitude }, { auth: true }),
 };

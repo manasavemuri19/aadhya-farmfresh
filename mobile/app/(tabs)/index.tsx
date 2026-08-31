@@ -14,7 +14,7 @@ import { catalogApi } from '../../src/api/endpoints';
 import { cartCount, useCart } from '../../src/store/cart';
 import { useLocationStore } from '../../src/store/location';
 import { useSession } from '../../src/store/session';
-import { useActiveOrder } from '../../src/hooks/useActiveOrder';
+import { useActiveOrders } from '../../src/hooks/useActiveOrder';
 import { color, font, size, space } from '../../src/theme/tokens';
 import { TRACKER_BAR_SPACE } from './_layout';
 import type { ProductView } from '../../src/api/types';
@@ -28,7 +28,7 @@ export default function OrderTab() {
   const [search, setSearch] = useState('');
   const items = useCart((s) => s.items);
   const location = useLocationStore();
-  const activeOrder = useActiveOrder();
+  const activeOrders = useActiveOrders();
 
   useEffect(() => {
     if (location.status === 'idle') void location.request();
@@ -145,7 +145,7 @@ export default function OrderTab() {
         count={count}
         totalPaise={null}
         onPress={() => router.push('/cart')}
-        bottomOffset={activeOrder ? TRACKER_BAR_SPACE + space.xs : 0}
+        bottomOffset={activeOrders.length > 0 ? activeOrders.length * TRACKER_BAR_SPACE + space.xs : 0}
       />
     </View>
   );

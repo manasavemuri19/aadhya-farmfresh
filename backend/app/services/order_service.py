@@ -42,6 +42,7 @@ from app.core.errors import (
     NotFound,
     OutOfStock,
     PriceChanged,
+    UpstreamError,
 )
 from app.core.ids import human_order_number, new_order_id, new_payment_id
 from app.domain.enums import OrderStatus, PaymentMethod, PaymentStatus
@@ -50,6 +51,7 @@ from app.payments.base import PaymentProvider, WebhookEvent
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
+from app.schemas.auth import Address
 from app.schemas.catalog import Variant
 from app.schemas.order import (
     CartLineInput,
@@ -439,7 +441,80 @@ class OrderService:
                     reason=f"order_{target_status.value}",
                     order_id=order_id, actor=actor,
                 )
+
+        # The CAS above only ever lets one caller past it for a given order
+        # (a concurrent second cancel/refund gets `updated = None` above and
+        # returns before reaching here), so this runs at most once per order —
+        # no separate idempotency guard needed for the refund itself.
+        if await self._maybe_refund(order, target_status=target_status):
+            refreshed = await self.orders.get(order_id)
+            if refreshed is not None:
+                updated = refreshed
         return updated
+
+    async def _maybe_refund(self, order: dict[str, Any], *, target_status: OrderStatus) -> bool:
+        """Refund a captured online payment when its order is cancelled or
+        force-refunded.
+
+        Cash-on-delivery orders never reach here with anything to refund —
+        nothing was ever charged. An online order that never got past
+        `pending_payment` also has nothing captured, so this is a no-op for
+        the far more common "changed my mind before paying" cancel too.
+        """
+        payment = order.get("payment") or {}
+        if payment.get("method") != PaymentMethod.ONLINE.value:
+            return False
+        if payment.get("status") != PaymentStatus.CAPTURED.value:
+            return False
+
+        provider_payment_id = payment.get("provider_payment_id")
+        if not provider_payment_id:
+            log.error(
+                "captured payment has no provider_payment_id on file; cannot refund",
+                extra={"order": order["id"]},
+            )
+            return False
+
+        try:
+            await self.payments.refund(
+                provider_payment_id=provider_payment_id,
+                amount_paise=payment["amount_paise"],
+                notes={"order_id": order["id"], "reason": target_status.value},
+            )
+        except UpstreamError:
+            # The cancel itself already went through — stock is released and
+            # the order is cancelled either way. A refund that fails here
+            # needs a human to retry it against the gateway directly; it
+            # should never block or unwind the cancel that already happened.
+            log.exception("refund failed while cancelling order", extra={"order": order["id"]})
+            return False
+
+        await self.orders.set_payment_status(order["id"], PaymentStatus.REFUNDED)
+        log.info("refund issued on cancel", extra={"order": order["id"]})
+        return True
+
+    async def update_address(
+        self, *, order_id: str, user_id: str, address: Address
+    ) -> OrderView:
+        """Change the delivery address on an order still in the same window
+        the customer can cancel from — once it's packed for pickup, changing
+        where it's headed needs a person, not a form; see CUSTOMER_CANCELLABLE.
+        """
+        updated = await self.orders.update_address(
+            order_id,
+            user_id,
+            address.model_dump(mode="json"),
+            expected_statuses=[s.value for s in CUSTOMER_CANCELLABLE],
+        )
+        if updated is None:
+            existing = await self.orders.get_for_user(order_id, user_id)
+            if existing is None:
+                raise NotFound("We could not find that order.")
+            raise Forbidden(
+                "This order is already being prepared for delivery, so the address can no "
+                "longer be changed here. Call us and we will sort it out."
+            )
+        return self._to_view(updated)
 
     async def release_expired_holds(self, *, limit: int = 100) -> int:
         """Sweep abandoned checkouts back onto the shelf."""
@@ -494,4 +569,5 @@ class OrderService:
             created_at=order["created_at"],
             updated_at=order["updated_at"],
             can_cancel=status in CUSTOMER_CANCELLABLE,
+            can_edit_address=status in CUSTOMER_CANCELLABLE,
         )

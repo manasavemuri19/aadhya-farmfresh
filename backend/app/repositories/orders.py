@@ -231,6 +231,34 @@ class OrderRepository:
             update(Payment).where(Payment.order_id == order_id).values(**values)
         )
 
+    async def update_address(
+        self,
+        order_id: str,
+        user_id: str,
+        address: dict[str, Any],
+        *,
+        expected_statuses: list[str],
+    ) -> dict[str, Any] | None:
+        """Compare-and-swap on status being one still worth calling
+        "editable" — the same idea as `transition`, just guarding a field
+        instead of moving one. A status change racing in between (staff
+        marks it packed the instant before this lands) means this simply
+        finds zero rows and reports "too late" rather than silently
+        overwriting an address the farm has already dispatched against.
+        """
+        result = await self.session.execute(
+            update(OrderRow)
+            .where(
+                OrderRow.id == order_id,
+                OrderRow.user_id == user_id,
+                OrderRow.status.in_(expected_statuses),
+            )
+            .values(address=address)
+        )
+        if result.rowcount != 1:
+            return None
+        return await self.get_for_user(order_id, user_id)
+
     async def mark_stock_released(self, order_id: str) -> bool:
         """Flip the release flag exactly once.
 

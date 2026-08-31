@@ -135,6 +135,9 @@ export interface OrderView {
   created_at: string;
   updated_at: string;
   can_cancel: boolean;
+  // Same window as can_cancel — once an order is packed for pickup, changing
+  // its destination needs a person, not a form. See order-edit-address.tsx.
+  can_edit_address: boolean;
 }
 
 export interface UserProfile {

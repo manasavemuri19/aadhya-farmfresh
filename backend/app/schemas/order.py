@@ -111,6 +111,9 @@ class OrderView(Schema):
     created_at: datetime
     updated_at: datetime
     can_cancel: bool = False
+    # Same window as can_cancel (CUSTOMER_CANCELLABLE) — once an order is
+    # packed for pickup, changing its destination needs a person, not a form.
+    can_edit_address: bool = False
 
 
 class CancelOrderRequest(Schema):
@@ -120,6 +123,10 @@ class CancelOrderRequest(Schema):
 class UpdateOrderStatusRequest(Schema):
     status: OrderStatus
     note: str = Field(default="", max_length=200)
+
+
+class UpdateOrderAddressRequest(Schema):
+    address: Address
 
 
 class VerifyPaymentRequest(Schema):

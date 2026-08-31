@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useSession } from '../../src/store/session';
 import { OrderTrackerBar, TRACKER_BAR_HEIGHT } from '../../src/components/OrderTrackerBar';
-import { useActiveOrder } from '../../src/hooks/useActiveOrder';
+import { useActiveOrders } from '../../src/hooks/useActiveOrder';
 import { color, font, space } from '../../src/theme/tokens';
 
 // Extra room below the default safe-area inset. The stock system nav bar
@@ -49,8 +49,10 @@ export default function TabsLayout() {
   // websocket/push channel for order updates yet. Skipped entirely for a
   // delivery agent — this tracks the signed-in person's own placed orders,
   // which isn't what an agent is in the app to do. Shared with the Order
-  // tab (see useActiveOrder) so its own cart bar can leave room for this.
-  const activeOrder = useActiveOrder();
+  // tab (see useActiveOrders) so its own cart bar can leave room for this.
+  // Plural because more than one order can be in progress at once — each
+  // gets its own bar, stacked bottom-to-top above the tab bar.
+  const activeOrders = useActiveOrders();
 
   return (
     <View style={styles.root}>
@@ -119,15 +121,19 @@ export default function TabsLayout() {
         />
       </Tabs>
 
-      {activeOrder && (
-        <View pointerEvents="box-none" style={[styles.trackerWrap, { bottom: tabBarHeight }]}>
+      {activeOrders.map((order, index) => (
+        <View
+          key={order.id}
+          pointerEvents="box-none"
+          style={[styles.trackerWrap, { bottom: tabBarHeight + index * TRACKER_BAR_SPACE }]}
+        >
           <OrderTrackerBar
-            orderNumber={activeOrder.order_number}
-            status={activeOrder.status}
-            onPress={() => router.push(`/order/${activeOrder.id}`)}
+            orderNumber={order.order_number}
+            status={order.status}
+            onPress={() => router.push(`/order/${order.id}`)}
           />
         </View>
-      )}
+      ))}
     </View>
   );
 }

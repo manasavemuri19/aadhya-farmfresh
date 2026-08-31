@@ -110,3 +110,25 @@ class DeliveryRepository:
             )
         ).scalars().first()
         return _to_dict(row) if row else None
+
+    async def release(self, order_id: str, agent_id: str) -> bool:
+        """The mirror image of `accept`: only the agent currently holding the
+        order can let it go, and only while it's still just-confirmed.
+
+        Scoped to CONFIRMED on purpose — `list_new_requests` only ever
+        surfaces confirmed-and-unassigned orders, so clearing
+        `delivery_agent_id` on anything already packed or out for delivery
+        would silently vanish it from every agent's view rather than
+        actually sending it back to the pool. Once it's past that point,
+        reassigning it is a farm-staff action, not a self-serve one.
+        """
+        result = await self.session.execute(
+            update(OrderRow)
+            .where(
+                OrderRow.id == order_id,
+                OrderRow.delivery_agent_id == agent_id,
+                OrderRow.status == OrderStatus.CONFIRMED.value,
+            )
+            .values(delivery_agent_id=None, delivery_assigned_at=None)
+        )
+        return result.rowcount == 1
