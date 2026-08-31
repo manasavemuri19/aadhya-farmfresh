@@ -2,13 +2,11 @@ import { StyleSheet, View } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useQuery } from '@tanstack/react-query';
 
 import { useSession } from '../../src/store/session';
-import { ordersApi } from '../../src/api/endpoints';
-import { OrderTrackerBar } from '../../src/components/OrderTrackerBar';
+import { OrderTrackerBar, TRACKER_BAR_HEIGHT } from '../../src/components/OrderTrackerBar';
+import { useActiveOrder } from '../../src/hooks/useActiveOrder';
 import { color, font, space } from '../../src/theme/tokens';
-import type { OrderStatus } from '../../src/api/types';
 
 // Extra room below the default safe-area inset. The stock system nav bar
 // inset alone was leaving labels feeling cramped/clipped on several
@@ -16,9 +14,12 @@ import type { OrderStatus } from '../../src/api/types';
 // split between a taller bar and more bottom padding.
 const EXTRA_BOTTOM_SPACE = 36;
 
-// Placed once an order is paid/confirmed, until it's actually in the
-// customer's hands — this is the window the tracker bar should cover.
-const IN_PROGRESS_STATUSES: readonly OrderStatus[] = ['confirmed', 'packed', 'out_for_delivery'];
+// Total vertical space the tracker bar occupies once mounted (its wrap's
+// own top padding + the bar's rendered height) — exported so a screen with
+// its own bottom-anchored bar (the Order tab's CartBar) can add this as
+// extra offset instead of rendering underneath the tracker. See CartBar's
+// `bottomOffset` prop.
+export const TRACKER_BAR_SPACE = space.sm + TRACKER_BAR_HEIGHT;
 
 /**
  * Three different tab sets share this one file, gated by role: customer
@@ -47,15 +48,9 @@ export default function TabsLayout() {
   // screens. Polling rather than push: good enough while there's no
   // websocket/push channel for order updates yet. Skipped entirely for a
   // delivery agent — this tracks the signed-in person's own placed orders,
-  // which isn't what an agent is in the app to do.
-  const orders = useQuery({
-    queryKey: ['orders'],
-    queryFn: () => ordersApi.list(),
-    refetchInterval: 15_000,
-    enabled: !isDeliveryAgent,
-  });
-  const activeOrder = orders.data?.find((o: { status: OrderStatus }) =>
-    IN_PROGRESS_STATUSES.includes(o.status));
+  // which isn't what an agent is in the app to do. Shared with the Order
+  // tab (see useActiveOrder) so its own cart bar can leave room for this.
+  const activeOrder = useActiveOrder();
 
   return (
     <View style={styles.root}>

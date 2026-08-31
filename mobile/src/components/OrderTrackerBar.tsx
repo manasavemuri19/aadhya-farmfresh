@@ -9,6 +9,13 @@ const LABEL: Partial<Record<OrderStatus, string>> = {
   out_for_delivery: 'On the way',
 };
 
+// This bar's own rendered height — exported so a screen with its own
+// bottom-anchored bar (the Order tab's CartBar) can derive how much space to
+// leave for this one instead of guessing a second, possibly-stale number.
+// Both bars are positioned absolutely by their own screens/layout, so
+// neither naturally knows about the other's height without this.
+export const TRACKER_BAR_HEIGHT = 52;
+
 interface Props {
   orderNumber: string;
   status: OrderStatus;
@@ -48,7 +55,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    minHeight: 52,
+    minHeight: TRACKER_BAR_HEIGHT,
   },
   pressed: { opacity: 0.9 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.onPrimary },
