@@ -75,7 +75,7 @@ export default function OrderTab() {
         stickyHeaderIndices={[0]}
         ListHeaderComponent={
           <View style={styles.headerWrap}>
-            <View style={[styles.orangeZone, { paddingTop: insets.top + space.md }]}>
+            <View style={[styles.headerBand, { paddingTop: insets.top + space.md }]}>
               <Text variant="display" style={styles.wordmark}>Aadya Dairy</Text>
               <Text
                 variant="caption"
@@ -135,12 +135,10 @@ const styles = StyleSheet.create({
   headerWrap: {
     marginHorizontal: -space.lg,
   },
-  orangeZone: {
-    // Two banded-gradient attempts both showed visible seams between
-    // strips — a true smooth gradient needs a native library (a rebuild,
-    // not an update), so a plain solid fill is the honest, seam-free choice
-    // until that trade-off is worth making.
-    backgroundColor: color.primary,
+  headerBand: {
+    // A single deeper beige, not orange — matches the rest of the app's
+    // warm-beige palette instead of clashing against it.
+    backgroundColor: color.surfaceDeep,
     paddingHorizontal: space.lg,
     paddingBottom: space.md,
   },
