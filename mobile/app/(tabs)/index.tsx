@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 
 import { Text } from '../../src/components/Text';
@@ -13,22 +13,39 @@ import { ErrorState, Loading } from '../../src/components/Feedback';
 import { catalogApi } from '../../src/api/endpoints';
 import { cartCount, useCart } from '../../src/store/cart';
 import { useLocationStore } from '../../src/store/location';
+import { useSession } from '../../src/store/session';
+import { useActiveOrder } from '../../src/hooks/useActiveOrder';
 import { color, font, size, space } from '../../src/theme/tokens';
+import { TRACKER_BAR_SPACE } from './_layout';
 import type { ProductView } from '../../src/api/types';
 
 export default function OrderTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const role = useSession((s) => s.user?.role);
+  const isDeliveryAgent = role === 'delivery_agent';
   const [category, setCategory] = useState('all');
   const [search, setSearch] = useState('');
   const items = useCart((s) => s.items);
   const location = useLocationStore();
+  const activeOrder = useActiveOrder();
 
   useEffect(() => {
     if (location.status === 'idle') void location.request();
   }, [location]);
 
-  const catalog = useQuery({ queryKey: ['catalog'], queryFn: () => catalogApi.get() });
+  // This tab is hidden from a delivery agent's tab bar entirely (see
+  // (tabs)/_layout.tsx's `href: null`), but the navigator can still land
+  // here first on a cold start, before role is known and the tab bar itself
+  // resolves to Requests — see that file's comment on the `key`/
+  // `initialRouteName` race this depends on timing to avoid. Bouncing here,
+  // unconditionally, fixes it regardless of that timing: an agent is never
+  // shown the catalog, no matter how this screen became active.
+  const catalog = useQuery({
+    queryKey: ['catalog'],
+    queryFn: () => catalogApi.get(),
+    enabled: !isDeliveryAgent,
+  });
 
   // Filter locally by category and search term — the catalog is small enough
   // that both should feel instant rather than round-tripping to the server.
@@ -46,6 +63,8 @@ export default function OrderTab() {
   }, [catalog.data, category, search]);
 
   const count = cartCount(items);
+
+  if (isDeliveryAgent) return <Redirect href="/requests" />;
 
   if (catalog.isPending) return <Loading label="Bringing in today's stock" />;
   if (catalog.isError) {
@@ -122,7 +141,12 @@ export default function OrderTab() {
         }
       />
 
-      <CartBar count={count} totalPaise={null} onPress={() => router.push('/cart')} />
+      <CartBar
+        count={count}
+        totalPaise={null}
+        onPress={() => router.push('/cart')}
+        bottomOffset={activeOrder ? TRACKER_BAR_SPACE + space.xs : 0}
+      />
     </View>
   );
 }

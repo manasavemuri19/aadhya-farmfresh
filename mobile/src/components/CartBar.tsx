@@ -9,14 +9,30 @@ interface Props {
   totalPaise: number | null;
   onPress: () => void;
   label?: string;
+  /**
+   * Extra space to leave below the bar — e.g. so it stacks above the
+   * OrderTrackerBar (a persistent order-in-progress strip that lives at the
+   * tabs-layout level, pinned just above the tab bar) instead of rendering
+   * underneath it. Both bars are absolutely positioned bottom-anchored, so
+   * without this they land in the same spot and overlap whenever a customer
+   * has both an active order and something in their cart.
+   */
+  bottomOffset?: number;
 }
 
-export function CartBar({ count, totalPaise, onPress, label = 'View cart' }: Props) {
+export function CartBar({
+  count, totalPaise, onPress, label = 'View cart', bottomOffset = 0,
+}: Props) {
   const insets = useSafeAreaInsets();
   if (count === 0) return null;
 
   return (
-    <View style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+    <View
+      style={[
+        styles.wrap,
+        { bottom: bottomOffset, paddingBottom: Math.max(insets.bottom, space.md) },
+      ]}
+    >
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -36,7 +52,7 @@ export function CartBar({ count, totalPaise, onPress, label = 'View cart' }: Pro
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    left: 0, right: 0, bottom: 0,
+    left: 0, right: 0,
     paddingHorizontal: space.lg,
     paddingTop: space.sm,
   },
