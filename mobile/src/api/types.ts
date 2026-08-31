@@ -176,3 +176,21 @@ export interface AdminProduct {
   is_active: boolean;
   variants: AdminVariant[];
 }
+
+// ---------- delivery agent ----------
+
+/** Leaner than OrderView on purpose — an agent needs where-to-go and
+ * what's-in-it, not the customer's payment method or full timeline. */
+export interface DeliveryOrderView {
+  id: string;
+  order_number: string;
+  status: OrderStatus;
+  address: Address;
+  notes: string;
+  total_paise: number;
+  item_count: number;
+  created_at: string;
+  delivery_assigned_at: string | null;
+  /** null = distance unknown (no coordinates to compare), never "hidden". */
+  distance_km: number | null;
+}

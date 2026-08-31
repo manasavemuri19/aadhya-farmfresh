@@ -1,6 +1,7 @@
 import { api } from './client';
 import type {
-  Address, AdminProduct, CatalogResponse, OrderView, ProductView, Quote, TokenPair, UserProfile,
+  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderView, ProductView, Quote,
+  TokenPair, UserProfile,
 } from './types';
 
 export interface CartLineInput { sku: string; qty: number }
@@ -87,4 +88,17 @@ export const adminApi = {
     api.post<{ sku: string; is_active: boolean }>(
       `/admin/products/${sku}/availability?active=${active}`, undefined, { auth: true },
     ),
+};
+
+export const deliveryApi = {
+  // Paid, unassigned orders within (an expanding) range of the agent's last
+  // reported location — see requests.tsx for how that location gets there.
+  listRequests: () => api.get<DeliveryOrderView[]>('/delivery/requests', true),
+  listOngoing: () => api.get<DeliveryOrderView[]>('/delivery/ongoing', true),
+  // 409 if someone else's accept landed first — see requests.tsx for how
+  // that's surfaced (not a validation error, just "it's gone now").
+  accept: (orderId: string) =>
+    api.post<DeliveryOrderView>(`/delivery/orders/${orderId}/accept`, undefined, { auth: true }),
+  reportLocation: (latitude: number, longitude: number) =>
+    api.post<void>('/delivery/location', { latitude, longitude }, { auth: true }),
 };

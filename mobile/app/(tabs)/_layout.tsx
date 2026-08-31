@@ -21,11 +21,12 @@ const EXTRA_BOTTOM_SPACE = 36;
 const IN_PROGRESS_STATUSES: readonly OrderStatus[] = ['confirmed', 'packed', 'out_for_delivery'];
 
 /**
- * Two tabs for a customer, three for staff/admin — "Update Stock" is
+ * Three different tab sets share this one file, gated by role: customer
+ * gets Order + Profile; staff/admin get Order + Update Stock + Profile;
+ * a delivery agent gets Requests + Profile only. Every screen is
  * registered unconditionally (expo-router needs the route to exist) but
- * hidden from the bar via `href: null` for anyone without the role, rather
- * than being a second, separate navigator. One tree, one set of screens,
- * role only ever changes what's visible.
+ * hidden from the bar via `href: null` for roles that shouldn't see it —
+ * one tree, one set of screens, role only ever changes what's visible.
  *
  * Icons come from @expo/vector-icons, which ships as part of Expo's core
  * SDK — already linked in every existing build, so real icons here don't
@@ -34,6 +35,7 @@ const IN_PROGRESS_STATUSES: readonly OrderStatus[] = ['confirmed', 'packed', 'ou
 export default function TabsLayout() {
   const role = useSession((s) => s.user?.role);
   const canManageStock = role === 'staff' || role === 'admin';
+  const isDeliveryAgent = role === 'delivery_agent';
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -43,11 +45,14 @@ export default function TabsLayout() {
   // pinned above the tab bar no matter which tab is open — the same way the
   // cart button in most delivery apps doesn't disappear when you switch
   // screens. Polling rather than push: good enough while there's no
-  // websocket/push channel for order updates yet.
+  // websocket/push channel for order updates yet. Skipped entirely for a
+  // delivery agent — this tracks the signed-in person's own placed orders,
+  // which isn't what an agent is in the app to do.
   const orders = useQuery({
     queryKey: ['orders'],
     queryFn: () => ordersApi.list(),
     refetchInterval: 15_000,
+    enabled: !isDeliveryAgent,
   });
   const activeOrder = orders.data?.find((o: { status: OrderStatus }) =>
     IN_PROGRESS_STATUSES.includes(o.status));
@@ -73,6 +78,7 @@ export default function TabsLayout() {
           name="index"
           options={{
             title: 'Order',
+            href: isDeliveryAgent ? null : undefined,
             tabBarIcon: ({ color: tint, focused }) => (
               <Ionicons name={focused ? 'bag' : 'bag-outline'} size={22} color={tint} />
             ),
@@ -85,6 +91,16 @@ export default function TabsLayout() {
             href: canManageStock ? undefined : null,
             tabBarIcon: ({ color: tint, focused }) => (
               <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} size={22} color={tint} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="requests"
+          options={{
+            title: 'Requests',
+            href: isDeliveryAgent ? undefined : null,
+            tabBarIcon: ({ color: tint, focused }) => (
+              <Ionicons name={focused ? 'bicycle' : 'bicycle-outline'} size={22} color={tint} />
             ),
           }}
         />
