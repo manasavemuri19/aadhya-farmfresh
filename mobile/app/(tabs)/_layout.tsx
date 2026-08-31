@@ -60,6 +60,14 @@ export default function TabsLayout() {
   return (
     <View style={styles.root}>
       <Tabs
+        // initialRouteName is only read once, the very first time this
+        // navigator mounts — if `role` isn't synchronously known yet on
+        // that first render (a brief moment while the session is still
+        // resolving), it locks in "index" regardless and never
+        // re-evaluates, even after role becomes known a moment later. The
+        // key forces a fresh mount — and a fresh read of initialRouteName
+        // — the instant role goes from unknown to known.
+        key={role ?? 'pending'}
         initialRouteName={isDeliveryAgent ? 'requests' : 'index'}
         screenOptions={{
           headerShown: false,
