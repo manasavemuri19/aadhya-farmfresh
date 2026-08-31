@@ -60,6 +60,7 @@ export default function TabsLayout() {
   return (
     <View style={styles.root}>
       <Tabs
+        initialRouteName={isDeliveryAgent ? 'requests' : 'index'}
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: color.primary,

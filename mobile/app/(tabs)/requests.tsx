@@ -40,6 +40,13 @@ export default function RequestsScreen() {
   const [locationDenied, setLocationDenied] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
   const [acceptError, setAcceptError] = useState<string | null>(null);
+  // Declining doesn't need a backend call: with "first accept wins," no one
+  // is waiting on this specific agent — the order just stays available for
+  // anyone else exactly as if this agent had never seen it. This only ever
+  // needs to hide the card on THIS device; it resets on next app launch (or
+  // if the same request briefly drops off the poll and comes back), same as
+  // dismissing a notification rather than actioning it.
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const reportedOnce = useRef(false);
 
   // Ask for and periodically report GPS position — this is what lets the
@@ -126,7 +133,7 @@ export default function RequestsScreen() {
   }
 
   const ongoingList = ongoing.data ?? [];
-  const requestsList = requests.data ?? [];
+  const requestsList = (requests.data ?? []).filter((o: DeliveryOrderView) => !dismissedIds.has(o.id));
 
   return (
     <FlatList
@@ -172,13 +179,22 @@ export default function RequestsScreen() {
       renderItem={({ item }) => (
         <View style={styles.card}>
           <RequestCardBody order={item} />
-          <Button
-            label={accepting === item.id ? 'Accepting…' : 'Accept'}
-            loading={accepting === item.id}
-            disabled={accepting !== null}
-            onPress={() => void accept(item)}
-            style={styles.acceptButton}
-          />
+          <View style={styles.actionRow}>
+            <Button
+              label="Decline"
+              variant="ghost"
+              disabled={accepting !== null}
+              onPress={() => setDismissedIds((prev) => new Set(prev).add(item.id))}
+              style={styles.declineButton}
+            />
+            <Button
+              label={accepting === item.id ? 'Accepting…' : 'Accept'}
+              loading={accepting === item.id}
+              disabled={accepting !== null}
+              onPress={() => void accept(item)}
+              style={styles.acceptButton}
+            />
+          </View>
         </View>
       )}
       ListEmptyComponent={
@@ -247,7 +263,9 @@ const styles = StyleSheet.create({
   },
   total: { fontFamily: font.monoBold, fontSize: size.md, color: color.ink },
   ongoingStatus: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
-  acceptButton: { marginTop: space.xs },
+  actionRow: { flexDirection: 'row', gap: space.sm, marginTop: space.xs },
+  declineButton: { flex: 1 },
+  acceptButton: { flex: 2 },
   errorBox: {
     backgroundColor: color.discountSoft,
     borderRadius: radius.md,

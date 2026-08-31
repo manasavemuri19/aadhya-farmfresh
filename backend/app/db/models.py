@@ -302,6 +302,11 @@ class Payment(Base, TimestampMixin):
     provider: Mapped[str | None] = mapped_column(String(32))
     provider_order_id: Mapped[str | None] = mapped_column(String(80))
     provider_payment_id: Mapped[str | None] = mapped_column(String(80))
+    # The hosted checkout URL (e.g. Razorpay's Payment Link `short_url`) is
+    # only ever produced once, at order-creation time. Without persisting it
+    # here, every later GET /orders/{id} has no way to get it back, and
+    # "Open payment page" is stuck disabled forever.
+    checkout_payload: Mapped[dict | None] = mapped_column(JSONB)
 
     order: Mapped[Order] = relationship(back_populates="payment")
 
