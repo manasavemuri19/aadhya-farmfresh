@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.api.deps import DeliveryAgentUser, get_delivery_service
-from app.schemas.delivery import AgentLocationUpdate, DeliveryOrderView
+from app.schemas.delivery import AgentLocationUpdate, DeliveryOrderView, UpdateDeliveryStatusRequest
 from app.services.delivery_service import DeliveryService
 
 router = APIRouter(prefix="/delivery", tags=["delivery"])
@@ -39,6 +39,19 @@ async def release_request(
     """The agent backs out after accepting — the order goes back into
     `/delivery/requests` for anyone else to pick up (see DeliveryService.release)."""
     await svc.release(order_id, agent.user_id)
+
+
+@router.post("/orders/{order_id}/status", response_model=DeliveryOrderView)
+async def update_delivery_status(
+    order_id: str, body: UpdateDeliveryStatusRequest, agent: DeliveryAgentUser, svc: Delivery
+) -> DeliveryOrderView:
+    """Packed / On the way / Delivered, on an order this agent accepted.
+
+    The customer's own order screen picks this up on its next poll — same
+    `OrderStatus` enum and the same `assert_transition` rules as every other
+    status change, just entered from the agent's app instead of staff's.
+    """
+    return await svc.update_status(order_id, agent.user_id, body.status, body.note)
 
 
 @router.post("/location", status_code=204)

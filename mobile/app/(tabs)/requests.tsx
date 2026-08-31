@@ -19,6 +19,17 @@ const ONGOING_LABEL: Partial<Record<OrderStatus, string>> = {
   out_for_delivery: 'On the way',
 };
 
+// What this agent can move an order into next, from wherever it currently
+// sits — mirrors _AGENT_ALLOWED_STATUSES on the backend. 'delivered' has no
+// entry here because once it's set the order leaves the ongoing list
+// entirely (see DeliveryRepository's _ONGOING_STATUSES), so there's nothing
+// further to advance it to from this screen.
+const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
+  confirmed: { status: 'packed', label: 'Mark as packed' },
+  packed: { status: 'out_for_delivery', label: 'Start delivery' },
+  out_for_delivery: { status: 'delivered', label: 'Mark delivered' },
+};
+
 // How often the device's GPS gets re-read and pushed to the backend while
 // this tab is open. Matching requests.tsx's own poll interval below keeps
 // "how far is this from me" reasonably fresh without hammering either the
@@ -47,8 +58,13 @@ export default function RequestsScreen() {
   // if the same request briefly drops off the poll and comes back), same as
   // dismissing a notification rather than actioning it.
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const [releasing, setReleasing] = useState<string | null>(null);
-  const [releaseError, setReleaseError] = useState<string | null>(null);
+  // Release and status-advance are two different actions that can both be
+  // visible on the same "confirmed" card, so each tracks its own in-flight
+  // order id (for which button shows its own busy label) while sharing one
+  // error box below the Ongoing heading.
+  const [releasingId, setReleasingId] = useState<string | null>(null);
+  const [advancingId, setAdvancingId] = useState<string | null>(null);
+  const [ongoingActionError, setOngoingActionError] = useState<string | null>(null);
   const reportedOnce = useRef(false);
 
   // Ask for and periodically report GPS position — this is what lets the
@@ -129,8 +145,8 @@ export default function RequestsScreen() {
   // out-for-delivery order can't be sent back to the pool this way; a
   // button that would just 409 isn't worth showing.
   const release = async (order: DeliveryOrderView) => {
-    setReleaseError(null);
-    setReleasing(order.id);
+    setOngoingActionError(null);
+    setReleasingId(order.id);
     try {
       await deliveryApi.release(order.id);
       await Promise.all([
@@ -138,9 +154,9 @@ export default function RequestsScreen() {
         queryClient.invalidateQueries({ queryKey: ['delivery', 'ongoing'] }),
       ]);
     } catch (err) {
-      setReleaseError(err instanceof Error ? err.message : 'Could not release this order — try again.');
+      setOngoingActionError(err instanceof Error ? err.message : 'Could not release this order — try again.');
     } finally {
-      setReleasing(null);
+      setReleasingId(null);
     }
   };
 
@@ -153,6 +169,24 @@ export default function RequestsScreen() {
         { text: "Can't deliver it", style: 'destructive', onPress: () => void release(order) },
       ],
     );
+  };
+
+  // Advances an order one step (packed → out for delivery → delivered).
+  // The customer's own order screen picks the new status up on its next
+  // poll — nothing needs to be pushed to it from here.
+  const advanceStatus = async (order: DeliveryOrderView) => {
+    const next = NEXT_STATUS[order.status];
+    if (!next) return;
+    setOngoingActionError(null);
+    setAdvancingId(order.id);
+    try {
+      await deliveryApi.updateStatus(order.id, next.status);
+      void queryClient.invalidateQueries({ queryKey: ['delivery', 'ongoing'] });
+    } catch (err) {
+      setOngoingActionError(err instanceof Error ? err.message : 'Could not update this order — try again.');
+    } finally {
+      setAdvancingId(null);
+    }
   };
 
   if (ongoing.isPending || requests.isPending) return <Loading label="Loading requests" />;
@@ -190,33 +224,54 @@ export default function RequestsScreen() {
           {ongoingList.length > 0 && (
             <>
               <Text variant="label" style={styles.sectionLabel}>Ongoing</Text>
-              {releaseError && (
+              {ongoingActionError && (
                 <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>{releaseError}</Text>
+                  <Text style={styles.errorText}>{ongoingActionError}</Text>
                 </View>
               )}
-              {ongoingList.map((order: DeliveryOrderView) => (
-                <View key={order.id} style={[styles.card, styles.ongoingCard]}>
-                  <RequestCardBody order={order} />
-                  <View style={styles.ongoingBottomRow}>
-                    <Text style={styles.ongoingStatus}>
-                      {ONGOING_LABEL[order.status] ?? order.status}
-                    </Text>
-                    {order.status === 'confirmed' && (
-                      <Pressable
-                        onPress={() => confirmRelease(order)}
-                        disabled={releasing !== null}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Can't deliver order ${order.order_number}`}
-                      >
-                        <Text style={styles.releaseLink}>
-                          {releasing === order.id ? 'Releasing…' : "Can't deliver this"}
-                        </Text>
-                      </Pressable>
-                    )}
+              {ongoingList.map((order: DeliveryOrderView) => {
+                const next = NEXT_STATUS[order.status];
+                // Either action, on any card, blocks both buttons on THIS
+                // card — a second tap can't fire while the first is still
+                // in flight, but other cards stay fully usable.
+                const busy = releasingId !== null || advancingId !== null;
+                return (
+                  <View key={order.id} style={[styles.card, styles.ongoingCard]}>
+                    <RequestCardBody order={order} />
+                    <View style={styles.ongoingBottomRow}>
+                      <Text style={styles.ongoingStatus}>
+                        {ONGOING_LABEL[order.status] ?? order.status}
+                      </Text>
+                      <View style={styles.ongoingActions}>
+                        {order.status === 'confirmed' && (
+                          <Pressable
+                            onPress={() => confirmRelease(order)}
+                            disabled={busy}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Can't deliver order ${order.order_number}`}
+                          >
+                            <Text style={styles.releaseLink}>
+                              {releasingId === order.id ? 'Releasing…' : "Can't deliver this"}
+                            </Text>
+                          </Pressable>
+                        )}
+                        {next && (
+                          <Pressable
+                            onPress={() => void advanceStatus(order)}
+                            disabled={busy}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${next.label}, order ${order.order_number}`}
+                          >
+                            <Text style={styles.advanceLink}>
+                              {advancingId === order.id ? 'Updating…' : next.label}
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    </View>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </>
           )}
 
@@ -318,7 +373,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
   ongoingStatus: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
+  ongoingActions: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   releaseLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
+  advanceLink: { fontFamily: font.bodyBold, fontSize: size.sm, color: color.primary },
   actionRow: { flexDirection: 'row', gap: space.sm, marginTop: space.xs },
   declineButton: { flex: 1 },
   acceptButton: { flex: 2 },

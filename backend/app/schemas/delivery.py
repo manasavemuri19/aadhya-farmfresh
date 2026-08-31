@@ -11,6 +11,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from app.domain.enums import OrderStatus
 from app.schemas.auth import Address
 from app.schemas.common import Schema
 
@@ -35,3 +36,11 @@ class DeliveryOrderView(Schema):
 class AgentLocationUpdate(Schema):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+
+
+class UpdateDeliveryStatusRequest(Schema):
+    # Only packed / out_for_delivery / delivered are ever accepted here —
+    # DeliveryService.update_status rejects anything else (confirming,
+    # cancelling, refunding stay staff/admin actions via /admin).
+    status: OrderStatus
+    note: str = Field(default="", max_length=200)

@@ -114,8 +114,13 @@ def get_support_service(
 def get_delivery_service(
     deliveries: Annotated[DeliveryRepository, Depends(get_delivery_repo)],
     users: Annotated[UserRepository, Depends(get_user_repo)],
+    orders: Annotated[OrderService, Depends(get_order_service)],
 ) -> DeliveryService:
-    return DeliveryService(deliveries, users)
+    # DeliveryService delegates the actual status transition (packed / on
+    # the way / delivered) to OrderService rather than duplicating the
+    # transition-legality logic that already lives there — see
+    # DeliveryService.update_status.
+    return DeliveryService(deliveries, users, orders)
 
 
 class Principal:

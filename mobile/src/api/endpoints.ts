@@ -1,7 +1,7 @@
 import { api } from './client';
 import type {
-  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderView, ProductView, Quote,
-  TokenPair, UserProfile,
+  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderStatus, OrderView, ProductView,
+  Quote, TokenPair, UserProfile,
 } from './types';
 
 export interface CartLineInput { sku: string; qty: number }
@@ -109,6 +109,12 @@ export const deliveryApi = {
   // (see DeliveryRepository.release on the backend for exactly why).
   release: (orderId: string) =>
     api.post<void>(`/delivery/orders/${orderId}/release`, undefined, { auth: true }),
+  // Only 'packed' | 'out_for_delivery' | 'delivered' are accepted — the
+  // backend rejects anything else (confirming/cancelling/refunding stay
+  // staff-only). The customer's order screen picks this up on its own next
+  // poll; nothing needs to be pushed to it from here.
+  updateStatus: (orderId: string, status: OrderStatus, note?: string) =>
+    api.post<DeliveryOrderView>(`/delivery/orders/${orderId}/status`, { status, note }, { auth: true }),
   reportLocation: (latitude: number, longitude: number) =>
     api.post<void>('/delivery/location', { latitude, longitude }, { auth: true }),
 };
