@@ -284,12 +284,6 @@ class Payment(Base, TimestampMixin):
     provider: Mapped[str | None] = mapped_column(String(32))
     provider_order_id: Mapped[str | None] = mapped_column(String(80))
     provider_payment_id: Mapped[str | None] = mapped_column(String(80))
-    # The hosted checkout URL (e.g. Razorpay's Payment Link `short_url`) is
-    # only ever produced once, at order-creation time. Without persisting it
-    # here, every later GET /orders/{id} — which is what the app's payment
-    # screen actually polls — has no way to get it back, and "Open payment
-    # page" is stuck disabled forever.
-    checkout_payload: Mapped[dict | None] = mapped_column(JSONB)
 
     order: Mapped[Order] = relationship(back_populates="payment")
 
@@ -363,3 +357,26 @@ class WebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class SupportTicket(Base, TimestampMixin):
+    """The "still stuck?" fallback at the end of the Help & Support decision
+    tree, for when none of the canned answers actually resolved things.
+
+    Deliberately minimal — this is a mailbox, not a full support-ticketing
+    system: no status field, no assignment, no reply thread. Reviewing
+    submissions means querying this table directly until an admin view is
+    worth building — a real, disclosed gap, not an oversight.
+    """
+
+    __tablename__ = "support_tickets"
+    __table_args__ = (Index("ix_support_ticket_user", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which node of the decision tree they were on when they gave up on the
+    # canned answers and wrote in — free-form, purely to help whoever reads
+    # this ticket understand the context without re-asking. Null if ever
+    # submitted some other way in the future.
+    context_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
