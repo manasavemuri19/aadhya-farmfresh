@@ -68,5 +68,16 @@ class DeliveryService:
             raise Conflict("This order has already been accepted, or is no longer available.")
         return DeliveryOrderView(distance_km=None, **order)
 
+    async def release(self, order_id: str, agent_id: str) -> None:
+        """Let an agent back out of an order they accepted, sending it back
+        to the pool for anyone else to pick up (see DeliveryRepository.release
+        for exactly which window this is allowed in)."""
+        released = await self.deliveries.release(order_id, agent_id)
+        if not released:
+            raise Conflict(
+                "This order can no longer be released — it may already be packed for "
+                "pickup, or it isn't currently assigned to you."
+            )
+
     async def update_location(self, agent_id: str, *, latitude: float, longitude: float) -> None:
         await self.users.update_agent_location(agent_id, latitude=latitude, longitude=longitude)

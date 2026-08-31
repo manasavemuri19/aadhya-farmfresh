@@ -1,4 +1,5 @@
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -27,10 +28,50 @@ const COPY: Record<OrderStatus, string> = {
   refunded: 'Refunded',
 };
 
+// Ticks so the ETA line below counts down in real time instead of freezing
+// at whatever `eta_minutes` was when the order was placed. 30s is plenty —
+// the line only ever displays whole minutes, so anything shorter is wasted
+// re-renders.
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+/**
+ * `eta_minutes` is a single number frozen on the order at checkout — the
+ * slowest item's prep time (see pricing.compute_eta_minutes on the backend).
+ * It is a promise made at confirmation time, not a live GPS/traffic ETA, so
+ * the honest way to show it is as a countdown from the moment the order was
+ * confirmed, not as a static "X minutes" that never changes. Once the
+ * countdown runs out we stop naming a number — there's no live agent
+ * location feed yet to say anything more precise than "any moment now."
+ */
+function etaText(data: OrderView, now: number): string | null {
+  if (data.status === 'delivered' || data.status === 'cancelled' || data.status === 'refunded') {
+    return null;
+  }
+  const confirmedAt = data.timeline.find((event) => event.status === 'confirmed')?.at;
+  if (!confirmedAt) {
+    // Still pending_payment — nothing confirmed yet to count down from.
+    return `Arriving in about ${data.eta_minutes} minutes`;
+  }
+  const targetMs = new Date(confirmedAt).getTime() + data.eta_minutes * 60_000;
+  const remainingMinutes = Math.round((targetMs - now) / 60_000);
+  if (remainingMinutes >= 1) {
+    return `Arriving in about ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'}`;
+  }
+  return 'Arriving any moment now';
+}
+
 export default function OrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const now = useNow(30_000);
 
   const order = useQuery({
     queryKey: ['order', id],
@@ -66,15 +107,16 @@ export default function OrderScreen() {
   const data: OrderView = order.data;
   const currentStep = STEPS.findIndex((s) => s.status === data.status);
   const stopped = data.status === 'cancelled' || data.status === 'refunded';
+  const eta = etaText(data, now);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.hero}>
         <Text variant="caption">Order {data.order_number}</Text>
         <Text variant="title" style={styles.status}>{COPY[data.status]}</Text>
-        {!stopped && data.status !== 'delivered' && (
+        {eta && (
           <Text variant="caption" style={styles.eta}>
-            Arriving in about {data.eta_minutes} minutes
+            {eta}
           </Text>
         )}
       </View>
@@ -136,6 +178,11 @@ export default function OrderScreen() {
         <Text variant="caption">
           {data.address.city} {data.address.pincode}
         </Text>
+        {data.can_edit_address && (
+          <Pressable onPress={() => router.push(`/order-edit-address?orderId=${data.id}`)}>
+            <Text style={styles.editAddressLink}>Edit delivery address</Text>
+          </Pressable>
+        )}
       </View>
 
       {data.can_cancel && (
@@ -182,6 +229,7 @@ const styles = StyleSheet.create({
   trackLabelDone: { color: color.ink, fontFamily: font.bodyMedium },
   card: { backgroundColor: color.card, borderRadius: radius.md, padding: space.lg, gap: space.sm },
   cardTitle: { fontSize: size.base },
+  editAddressLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.primary, marginTop: 2 },
   line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: space.md },
   lineBody: { flex: 1, gap: 2 },
   lineTotal: { color: color.ink },

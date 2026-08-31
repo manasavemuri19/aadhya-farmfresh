@@ -11,6 +11,7 @@ from app.schemas.order import (
     CreateOrderRequest,
     OrderView,
     Quote,
+    UpdateOrderAddressRequest,
 )
 from app.services.order_service import OrderService
 
@@ -61,4 +62,15 @@ async def cancel_order(
 ) -> OrderView:
     return await svc.cancel(
         order_id=order_id, user_id=principal.user_id, reason=body.reason
+    )
+
+
+@router.patch("/orders/{order_id}/address", response_model=OrderView)
+async def update_order_address(
+    order_id: str, body: UpdateOrderAddressRequest, principal: CurrentUser, svc: Orders
+) -> OrderView:
+    """Only while the order is still in CUSTOMER_CANCELLABLE — see
+    OrderService.update_address and OrderView.can_edit_address."""
+    return await svc.update_address(
+        order_id=order_id, user_id=principal.user_id, address=body.address
     )

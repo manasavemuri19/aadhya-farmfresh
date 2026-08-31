@@ -80,6 +80,7 @@ export default function RootLayout() {
             <Stack.Screen name="payment-callback" options={{ title: 'Payment', headerBackVisible: false }} />
             <Stack.Screen name="orders" options={{ title: 'My orders' }} />
             <Stack.Screen name="order/[id]" options={{ title: 'Order' }} />
+            <Stack.Screen name="order-edit-address" options={{ title: 'Delivery address' }} />
             <Stack.Screen name="edit-details" options={{ title: 'Edit details' }} />
             <Stack.Screen name="help-support" options={{ title: 'Help & Support' }} />
           </Stack>

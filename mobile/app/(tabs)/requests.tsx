@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Location from 'expo-location';
@@ -47,6 +47,8 @@ export default function RequestsScreen() {
   // if the same request briefly drops off the poll and comes back), same as
   // dismissing a notification rather than actioning it.
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [releasing, setReleasing] = useState<string | null>(null);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
   const reportedOnce = useRef(false);
 
   // Ask for and periodically report GPS position — this is what lets the
@@ -122,6 +124,37 @@ export default function RequestsScreen() {
     }
   };
 
+  // Only offered while the order is still just-confirmed — see
+  // DeliveryRepository.release on the backend for why a packed or
+  // out-for-delivery order can't be sent back to the pool this way; a
+  // button that would just 409 isn't worth showing.
+  const release = async (order: DeliveryOrderView) => {
+    setReleaseError(null);
+    setReleasing(order.id);
+    try {
+      await deliveryApi.release(order.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['delivery', 'requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['delivery', 'ongoing'] }),
+      ]);
+    } catch (err) {
+      setReleaseError(err instanceof Error ? err.message : 'Could not release this order — try again.');
+    } finally {
+      setReleasing(null);
+    }
+  };
+
+  const confirmRelease = (order: DeliveryOrderView) => {
+    Alert.alert(
+      "Can't deliver this order?",
+      `Order #${order.order_number} will go back to the pool for another delivery partner to pick up.`,
+      [
+        { text: 'Never mind', style: 'cancel' },
+        { text: "Can't deliver it", style: 'destructive', onPress: () => void release(order) },
+      ],
+    );
+  };
+
   if (ongoing.isPending || requests.isPending) return <Loading label="Loading requests" />;
   if (requests.isError) {
     return (
@@ -157,12 +190,31 @@ export default function RequestsScreen() {
           {ongoingList.length > 0 && (
             <>
               <Text variant="label" style={styles.sectionLabel}>Ongoing</Text>
+              {releaseError && (
+                <View style={styles.errorBox}>
+                  <Text style={styles.errorText}>{releaseError}</Text>
+                </View>
+              )}
               {ongoingList.map((order: DeliveryOrderView) => (
                 <View key={order.id} style={[styles.card, styles.ongoingCard]}>
                   <RequestCardBody order={order} />
-                  <Text style={styles.ongoingStatus}>
-                    {ONGOING_LABEL[order.status] ?? order.status}
-                  </Text>
+                  <View style={styles.ongoingBottomRow}>
+                    <Text style={styles.ongoingStatus}>
+                      {ONGOING_LABEL[order.status] ?? order.status}
+                    </Text>
+                    {order.status === 'confirmed' && (
+                      <Pressable
+                        onPress={() => confirmRelease(order)}
+                        disabled={releasing !== null}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Can't deliver order ${order.order_number}`}
+                      >
+                        <Text style={styles.releaseLink}>
+                          {releasing === order.id ? 'Releasing…' : "Can't deliver this"}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </View>
               ))}
             </>
@@ -262,7 +314,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space.xs,
   },
   total: { fontFamily: font.monoBold, fontSize: size.md, color: color.ink },
+  ongoingBottomRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+  },
   ongoingStatus: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
+  releaseLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
   actionRow: { flexDirection: 'row', gap: space.sm, marginTop: space.xs },
   declineButton: { flex: 1 },
   acceptButton: { flex: 2 },

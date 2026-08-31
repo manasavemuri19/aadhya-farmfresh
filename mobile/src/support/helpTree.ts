@@ -3,11 +3,12 @@ import type { HelpTree } from './helpTree.types';
 /**
  * Content for the Help & Support chat tree — see HelpChatTree for the UI
  * that walks this. Kept honest about what the app actually does rather
- * than reassuring: e.g. refunds on a cancelled paid order are NOT
- * automatic yet (order_service.cancel only releases stock, it never calls
- * the payment provider's refund()), and there's no in-app way to edit an
- * order's address after it's placed. Both of those route straight to
- * "message us" rather than pretending otherwise.
+ * than reassuring: a cancelled paid order is refunded automatically
+ * (order_service._cancel calls the payment provider's refund() the moment
+ * the cancel goes through), and the address on an order still in an
+ * editable status can be changed from the order screen itself — see
+ * OrderView.can_edit_address. Only a genuinely late change (already
+ * packed or out for delivery) still routes to "message us".
  */
 export const HELP_TREE: HelpTree = {
   root: {
@@ -102,8 +103,9 @@ export const HELP_TREE: HelpTree = {
   payments_refund: {
     id: 'payments_refund',
     text:
-      "Being upfront about this: refunds on a cancelled paid order aren't automatic yet — that's a " +
-      "genuine gap, not a bug. Message us below with the order number and we'll process it directly.",
+      'Cancelling a paid order refunds it automatically to the original payment method — no need ' +
+      "to ask for it separately. It can take a few days to show up in your account depending on " +
+      "your bank. If it's been longer than that, message us below with the order number and we'll check.",
   },
 
   products: {
@@ -143,9 +145,10 @@ export const HELP_TREE: HelpTree = {
   account_edit_order: {
     id: 'account_edit_order',
     text:
-      "Editing the address on an order that's already placed isn't something the app supports yet — " +
-      "message us below with the order number and the correct address, and we'll pass it on before " +
-      "it goes out if there's still time.",
+      "Open the order from My Orders — if it's still Awaiting payment, Preparing, or Packed, you'll " +
+      "see an Edit delivery address button right there. Once it's On the way, that button disappears " +
+      "and it's too late to change it in the app — message us below with the order number and the " +
+      "correct address and we'll try to catch the rider.",
   },
 
   other: {
