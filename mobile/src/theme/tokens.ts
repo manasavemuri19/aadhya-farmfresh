@@ -12,7 +12,7 @@ export const color = {
   // Surfaces
   surface: '#F4EDE0',    // app background — warm beige
   surfaceAlt: '#EFE6D6', // image placeholder wells, pressed states
-  surfaceDeep: '#DEC9AF', // header band — a deeper shade of the same warm beige
+  surfaceDeep: '#354391', // header band 
   card: '#FFFDF9',       // cards — warm white, not clinical white
 
   // Ink
