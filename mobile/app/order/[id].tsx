@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 
 import { Text } from '../../src/components/Text';
 import { Button } from '../../src/components/Button';
@@ -9,7 +10,7 @@ import { ErrorState, Loading } from '../../src/components/Feedback';
 import { ordersApi } from '../../src/api/endpoints';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { OrderStatus, OrderView } from '../../src/api/types';
+import type { AgentLocation, Address, OrderStatus, OrderView } from '../../src/api/types';
 
 const STEPS: { status: OrderStatus; label: string }[] = [
   { status: 'confirmed', label: 'Confirmed' },
@@ -67,11 +68,32 @@ function etaText(data: OrderView, now: number): string | null {
   return 'Arriving any moment now';
 }
 
+/**
+ * A region covering both the agent and the destination, so the map opens
+ * already framed on the whole trip rather than one corner of it. Falls back
+ * to just centring on the agent when the address has no coordinates on file
+ * (an old order, or a hand-typed address) — nothing to frame a pair around.
+ */
+function regionFor(agent: AgentLocation, address: Address): Region {
+  if (address.latitude == null || address.longitude == null) {
+    return { latitude: agent.latitude, longitude: agent.longitude, latitudeDelta: 0.02, longitudeDelta: 0.02 };
+  }
+  const latitude = (agent.latitude + address.latitude) / 2;
+  const longitude = (agent.longitude + address.longitude) / 2;
+  // 2.5x the raw span plus a floor, so two very close points (the agent has
+  // nearly arrived) still get a sensible amount of surrounding context
+  // rather than a comically over-zoomed map.
+  const latitudeDelta = Math.max(Math.abs(agent.latitude - address.latitude) * 2.5, 0.02);
+  const longitudeDelta = Math.max(Math.abs(agent.longitude - address.longitude) * 2.5, 0.02);
+  return { latitude, longitude, latitudeDelta, longitudeDelta };
+}
+
 export default function OrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const now = useNow(30_000);
+  const mapRef = useRef<MapView>(null);
 
   const order = useQuery({
     queryKey: ['order', id],
@@ -85,6 +107,17 @@ export default function OrderScreen() {
       return ['delivered', 'cancelled', 'refunded'].includes(status) ? false : 5_000;
     },
   });
+
+  // Re-centres the map as the agent's reported location moves on each 5s
+  // poll — `initialRegion` alone only frames the map once, on first render,
+  // and would otherwise leave a live-tracking map staring at a stale spot.
+  const agentLocation = order.data?.delivery_agent_location ?? null;
+  const address = order.data?.address;
+  useEffect(() => {
+    if (agentLocation && address && mapRef.current) {
+      mapRef.current.animateToRegion(regionFor(agentLocation, address), 500);
+    }
+  }, [agentLocation, address]);
 
   const cancel = useMutation({
     mutationFn: (reason: string) => ordersApi.cancel(id, reason),
@@ -134,6 +167,37 @@ export default function OrderScreen() {
               </View>
             );
           })}
+        </View>
+      )}
+
+      {data.status === 'out_for_delivery' && (
+        <View style={styles.card}>
+          <Text variant="label" style={styles.cardTitle}>Live location</Text>
+          {agentLocation ? (
+            <MapView
+              ref={mapRef}
+              provider={PROVIDER_GOOGLE}
+              style={styles.map}
+              initialRegion={regionFor(agentLocation, data.address)}
+            >
+              <Marker
+                coordinate={{ latitude: agentLocation.latitude, longitude: agentLocation.longitude }}
+                title="Delivery agent"
+                pinColor={color.primary}
+              />
+              {data.address.latitude != null && data.address.longitude != null && (
+                <Marker
+                  coordinate={{ latitude: data.address.latitude, longitude: data.address.longitude }}
+                  title="Delivering to"
+                  pinColor={color.leaf}
+                />
+              )}
+            </MapView>
+          ) : (
+            <Text variant="caption" tone="muted">
+              Waiting for the delivery agent's live location…
+            </Text>
+          )}
         </View>
       )}
 
@@ -229,6 +293,7 @@ const styles = StyleSheet.create({
   trackLabelDone: { color: color.ink, fontFamily: font.bodyMedium },
   card: { backgroundColor: color.card, borderRadius: radius.md, padding: space.lg, gap: space.sm },
   cardTitle: { fontSize: size.base },
+  map: { width: '100%', height: 220, borderRadius: radius.md, overflow: 'hidden' },
   editAddressLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.primary, marginTop: 2 },
   line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: space.md },
   lineBody: { flex: 1, gap: 2 },

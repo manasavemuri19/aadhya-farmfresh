@@ -14,6 +14,7 @@ import { ApiError } from '../src/api/client';
 import { color } from '../src/theme/tokens';
 import { LoginScreen } from '../src/screens/LoginScreen';
 import { CompleteProfileScreen } from '../src/screens/CompleteProfileScreen';
+import { registerForPushNotifications } from '../src/lib/pushNotifications';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -49,6 +50,16 @@ export default function RootLayout() {
   useEffect(() => {
     if ((fontsLoaded || fontError) && status !== 'loading') void SplashScreen.hideAsync();
   }, [fontsLoaded, fontError, status]);
+  // Register for push once someone is actually signed in with a complete
+  // profile — the same gate the screen below uses to decide what to render.
+  // Registering earlier would have no account on the backend to attach the
+  // token to; registering on every render would spam the endpoint, which is
+  // why registerForPushNotifications guards its own re-entrancy too.
+  useEffect(() => {
+    if (status === 'signed_in' && isProfileComplete(user)) {
+      void registerForPushNotifications();
+    }
+  }, [status, user]);
 
   // Wait for both fonts and the session check before deciding what to show —
   // showing the shop for a flash before redirecting to login would defeat

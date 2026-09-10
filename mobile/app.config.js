@@ -60,6 +60,18 @@ const GOOGLE_ANDROID_CLIENT_ID =
   easBuildEnv.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ??
   '';
 
+// Google Maps Platform key (Maps SDK for Android / Directions / Geocoding),
+// restricted in Google Cloud Console to this app's package name + signing
+// keystore SHA-1 — same fallback approach as the values above. This key is
+// only ever read at native-build time (baked into the Android manifest by
+// Expo's prebuild step), unlike the others which the JS bundle also reads at
+// runtime — but the same `eas update`-doesn't-read-eas.json caveat applies
+// to keeping a real default here rather than a placeholder.
+const GOOGLE_MAPS_API_KEY =
+  process.env.GOOGLE_MAPS_API_KEY ??
+  easBuildEnv.GOOGLE_MAPS_API_KEY ??
+  '***REMOVED-ROTATE-THIS-GOOGLE-MAPS-API-KEY***';
+
 module.exports = {
   expo: {
     name: 'Aadya',
@@ -86,6 +98,17 @@ module.exports = {
         foregroundImage: './assets/adaptive-icon.png',
         backgroundColor: '#F4EDE0',
       },
+      // Added for FCM push notifications (project "aadya-dairy"). Safe to
+      // commit — contains only public app/project identifiers, no secrets.
+      // Not wired to expo-notifications yet; that plugin entry + the actual
+      // token-registration code lands once the FCM service-account key is
+      // also uploaded to EAS (see mobile/README or ask Claude for status).
+      googleServicesFile: './google-services.json',
+      config: {
+        googleMaps: {
+          apiKey: GOOGLE_MAPS_API_KEY,
+        },
+      },
     },
     web: {
       favicon: './assets/favicon.png',
@@ -109,12 +132,14 @@ module.exports = {
             'Aadya uses your location to find the right delivery address and estimate arrival time.',
         },
       ],
-      // No entry here for @react-native-google-signin/google-signin.
-      // Its config plugin exists only to wire up either a Firebase
-      // google-services.json (Android) or an iOS URL scheme — neither
-      // applies to this Android-only, Firebase-free setup. The native
-      // module reads its client ID purely from the JS-level
-      // GoogleSignin.configure({ webClientId }) call (see
+      'expo-notifications',
+      // No entry here for @react-native-google-signin/google-signin, even
+      // though a Firebase google-services.json now exists above (added for
+      // FCM push notifications, not for sign-in). This package's config
+      // plugin exists only to wire up a Firebase google-services.json or an
+      // iOS URL scheme for ITS OWN purposes — Google Sign-In here doesn't
+      // use either. The native module reads its client ID purely from the
+      // JS-level GoogleSignin.configure({ webClientId }) call (see
       // src/lib/googleAuth.ts), confirmed by inspecting the package's own
       // native Android source rather than assumed. Play Services matches
       // the app to its Android OAuth client by package name + signing

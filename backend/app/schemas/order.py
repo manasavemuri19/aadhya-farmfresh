@@ -93,6 +93,12 @@ class StatusEvent(Schema):
     by: str = "system"
 
 
+class AgentLocation(Schema):
+    latitude: float
+    longitude: float
+    updated_at: datetime
+
+
 class OrderView(Schema):
     id: str
     order_number: str
@@ -114,6 +120,11 @@ class OrderView(Schema):
     # Same window as can_cancel (CUSTOMER_CANCELLABLE) — once an order is
     # packed for pickup, changing its destination needs a person, not a form.
     can_edit_address: bool = False
+    # Only ever populated while status == out_for_delivery AND an agent is
+    # assigned — see OrderService._agent_location_if_visible. Deliberately
+    # never shown before pickup or after drop-off: there's nothing useful
+    # (or appropriate) to say about an agent's location outside that window.
+    delivery_agent_location: AgentLocation | None = None
 
 
 class CancelOrderRequest(Schema):

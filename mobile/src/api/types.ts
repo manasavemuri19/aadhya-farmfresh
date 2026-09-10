@@ -108,6 +108,14 @@ export interface StatusEvent {
   by: string;
 }
 
+/** Only ever present while status is 'out_for_delivery' and an agent is
+ * assigned — see the backend's OrderService._agent_location_if_visible. */
+export interface AgentLocation {
+  latitude: number;
+  longitude: number;
+  updated_at: string;
+}
+
 export interface PaymentView {
   method: PaymentMethod;
   status: PaymentStatus;
@@ -138,6 +146,7 @@ export interface OrderView {
   // Same window as can_cancel — once an order is packed for pickup, changing
   // its destination needs a person, not a form. See order-edit-address.tsx.
   can_edit_address: boolean;
+  delivery_agent_location: AgentLocation | null;
 }
 
 export interface UserProfile {

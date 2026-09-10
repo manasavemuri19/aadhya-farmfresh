@@ -51,6 +51,7 @@ from app.payments.base import PaymentProvider, WebhookEvent
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
+from app.repositories.users import UserRepository
 from app.schemas.auth import Address
 from app.schemas.catalog import Variant
 from app.schemas.order import (
@@ -61,10 +62,23 @@ from app.schemas.order import (
     QuoteLine,
 )
 from app.services.pricing import PricedLine, build_cart, price_line
+from app.services.push_service import PushService
 
 log = logging.getLogger(__name__)
 
 PAYMENT_HOLD = timedelta(minutes=15)
+
+# Push copy for the customer-facing statuses worth interrupting someone's day
+# for. Statuses not in this map (pending_payment) simply don't push — nothing
+# useful to tell anyone about a cart that hasn't paid yet.
+_STATUS_PUSH_COPY: dict[OrderStatus, tuple[str, str]] = {
+    OrderStatus.CONFIRMED: ("Order confirmed", "The farm is preparing order {order_number}."),
+    OrderStatus.PACKED: ("Order packed", "Order {order_number} is packed and ready to leave."),
+    OrderStatus.OUT_FOR_DELIVERY: ("On the way", "Order {order_number} is on its way to you."),
+    OrderStatus.DELIVERED: ("Delivered", "Order {order_number} has been delivered. Enjoy!"),
+    OrderStatus.CANCELLED: ("Order cancelled", "Order {order_number} was cancelled."),
+    OrderStatus.REFUNDED: ("Order refunded", "Order {order_number} has been refunded."),
+}
 
 
 class OrderService:
@@ -74,11 +88,51 @@ class OrderService:
         orders: OrderRepository,
         idempotency: IdempotencyRepository,
         payments: PaymentProvider,
+        *,
+        users: UserRepository | None = None,
+        push: PushService | None = None,
     ) -> None:
         self.products = products
         self.orders = orders
         self.idempotency = idempotency
         self.payments = payments
+        # Both optional, both default None: see get_order_service in deps.py
+        # for why (the background housekeeping sweeper builds this class
+        # directly, without either).
+        self.users = users
+        self.push = push
+
+    # ---------- notifications ----------
+    # Best-effort side effects on top of the state changes above — never
+    # allowed to affect whether a transition itself succeeds. Every call site
+    # below is *after* the database write already committed.
+
+    async def _notify_customer(self, order: dict[str, Any], new_status: OrderStatus) -> None:
+        if not self.push:
+            return
+        copy = _STATUS_PUSH_COPY.get(new_status)
+        if not copy:
+            return
+        title, body_template = copy
+        await self.push.notify_users(
+            [order["user_id"]],
+            title=title,
+            body=body_template.format(order_number=order["order_number"]),
+            data={"order_id": order["id"], "status": new_status.value},
+        )
+
+    async def _notify_agents_new_order(self, order: dict[str, Any]) -> None:
+        if not self.push or not self.users:
+            return
+        agent_ids = await self.users.list_delivery_agent_ids()
+        if not agent_ids:
+            return
+        await self.push.notify_users(
+            agent_ids,
+            title="New order available",
+            body=f"Order {order['order_number']} is ready for pickup.",
+            data={"order_id": order["id"]},
+        )
 
     # ---------- quoting ----------
 
@@ -302,6 +356,13 @@ class OrderService:
 
         order = await self.orders.get(order_id)
         assert order is not None
+
+        if is_cod:
+            # A COD order is confirmed the instant it's placed — nothing to
+            # wait on. Online orders get their "confirmed" notification later,
+            # from apply_webhook, once payment actually clears.
+            await self._notify_agents_new_order(order)
+
         return self._to_view(
             order,
             checkout_payload=provider_order.checkout_payload if provider_order else None,
@@ -345,7 +406,7 @@ class OrderService:
                 provider_payment_id=event.provider_payment_id,
             )
             if current is OrderStatus.PENDING_PAYMENT:
-                await self.orders.transition(
+                updated = await self.orders.transition(
                     order_id,
                     expected_status=OrderStatus.PENDING_PAYMENT,
                     new_status=OrderStatus.CONFIRMED,
@@ -353,6 +414,9 @@ class OrderService:
                     actor="payment_gateway",
                     extra_set={"hold_expires_at": None},
                 )
+                if updated:
+                    await self._notify_customer(updated, OrderStatus.CONFIRMED)
+                    await self._notify_agents_new_order(updated)
             return
 
         if event.is_failure:
@@ -403,6 +467,12 @@ class OrderService:
         )
         if not updated:
             raise Conflict("That order changed while you were updating it. Refresh and retry.")
+        await self._notify_customer(updated, new_status)
+        if new_status is OrderStatus.CONFIRMED:
+            # Reachable when staff manually confirm an order rather than it
+            # arriving via checkout/webhook (e.g. a COD edge case handled by
+            # hand) — the delivery pool still needs to hear about it either way.
+            await self._notify_agents_new_order(updated)
         return self._to_view(updated)
 
     async def _cancel(
@@ -450,6 +520,8 @@ class OrderService:
             refreshed = await self.orders.get(order_id)
             if refreshed is not None:
                 updated = refreshed
+
+        await self._notify_customer(updated, target_status)
         return updated
 
     async def _maybe_refund(self, order: dict[str, Any], *, target_status: OrderStatus) -> bool:
@@ -531,7 +603,25 @@ class OrderService:
         order = await self.orders.get_for_user(order_id, user_id)
         if not order:
             raise NotFound("We could not find that order.")
-        return self._to_view(order)
+        agent_location = await self._agent_location_if_visible(order)
+        return self._to_view(order, agent_location=agent_location)
+
+    async def _agent_location_if_visible(
+        self, order: dict[str, Any]
+    ) -> tuple[float, float, datetime] | None:
+        """Only ever shown to the customer while the order is genuinely out
+        for delivery — nothing useful (or appropriate) to show before pickup
+        or after drop-off. `self.users` is None on paths that don't need this
+        (e.g. background jobs), same guard shape as the push helpers above.
+        """
+        if not self.users:
+            return None
+        if OrderStatus(order["status"]) is not OrderStatus.OUT_FOR_DELIVERY:
+            return None
+        agent_id = order.get("delivery_agent_id")
+        if not agent_id:
+            return None
+        return await self.users.get_agent_location_with_time(agent_id)
 
     async def list_for_user(self, user_id: str, *, limit: int = 20) -> list[OrderView]:
         return [self._to_view(o) for o in await self.orders.list_for_user(user_id, limit=limit)]
@@ -544,7 +634,12 @@ class OrderService:
         return hashlib.sha256(body.encode()).hexdigest()
 
     @staticmethod
-    def _to_view(order: dict[str, Any], *, checkout_payload: dict | None = None) -> OrderView:
+    def _to_view(
+        order: dict[str, Any],
+        *,
+        checkout_payload: dict | None = None,
+        agent_location: tuple[float, float, datetime] | None = None,
+    ) -> OrderView:
         payment = dict(order["payment"] or {})
         if checkout_payload is not None:
             payment["checkout_payload"] = checkout_payload
@@ -570,4 +665,13 @@ class OrderService:
             updated_at=order["updated_at"],
             can_cancel=status in CUSTOMER_CANCELLABLE,
             can_edit_address=status in CUSTOMER_CANCELLABLE,
+            delivery_agent_location=(
+                {
+                    "latitude": agent_location[0],
+                    "longitude": agent_location[1],
+                    "updated_at": agent_location[2],
+                }
+                if agent_location
+                else None
+            ),
         )

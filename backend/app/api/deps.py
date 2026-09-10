@@ -25,12 +25,14 @@ from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.otp import OtpRepository
 from app.repositories.products import ProductRepository
+from app.repositories.push_tokens import PushTokenRepository
 from app.repositories.support import SupportRepository
 from app.repositories.users import UserRepository
 from app.services.auth_service import AuthService
 from app.services.catalog_service import CatalogService
 from app.services.delivery_service import DeliveryService
 from app.services.order_service import OrderService
+from app.services.push_service import PushService
 from app.services.support_service import SupportService
 
 
@@ -83,6 +85,16 @@ def get_delivery_repo(db: DB) -> DeliveryRepository:
     return DeliveryRepository(db)
 
 
+def get_push_token_repo(db: DB) -> PushTokenRepository:
+    return PushTokenRepository(db)
+
+
+def get_push_service(
+    tokens: Annotated[PushTokenRepository, Depends(get_push_token_repo)],
+) -> PushService:
+    return PushService(tokens)
+
+
 def get_auth_service(
     users: Annotated[UserRepository, Depends(get_user_repo)],
     otps: Annotated[OtpRepository, Depends(get_otp_repo)],
@@ -101,8 +113,16 @@ def get_order_service(
     orders: Annotated[OrderRepository, Depends(get_order_repo)],
     idem: Annotated[IdempotencyRepository, Depends(get_idempotency_repo)],
     payments: Annotated[PaymentProvider, Depends(get_payment_provider)],
+    users: Annotated[UserRepository, Depends(get_user_repo)],
+    push: Annotated[PushService, Depends(get_push_service)],
 ) -> OrderService:
-    return OrderService(products, orders, idem, payments)
+    # users/push are optional on OrderService itself (default None) so the
+    # background housekeeping sweeper in main.py, which constructs an
+    # OrderService directly rather than through this dependency chain, keeps
+    # working unchanged — it just doesn't send notifications for the expired
+    # holds it cancels. Every real HTTP request goes through here and gets
+    # both wired automatically.
+    return OrderService(products, orders, idem, payments, users=users, push=push)
 
 
 def get_support_service(

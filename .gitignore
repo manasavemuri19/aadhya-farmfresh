@@ -13,3 +13,8 @@ dist/
 .DS_Store
 "@ | Out-File -Encoding utf8 .gitignore
 backend/*.egg-info/
+
+# Firebase service-account key (FCM push notifications) — sensitive private
+# key, unlike google-services.json which is safe to commit. Firebase names
+# this file like "<project-id>-firebase-adminsdk-xxxxx-xxxxxxxxxx.json".
+*firebase-adminsdk*.json

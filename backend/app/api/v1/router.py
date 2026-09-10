@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1.routes import admin, auth, catalog, delivery, health, orders, payments, support
+from app.api.v1.routes import (
+    admin,
+    auth,
+    catalog,
+    delivery,
+    health,
+    notifications,
+    orders,
+    payments,
+    support,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -13,3 +23,4 @@ api_router.include_router(payments.router)
 api_router.include_router(admin.router)
 api_router.include_router(support.router)
 api_router.include_router(delivery.router)
+api_router.include_router(notifications.router)

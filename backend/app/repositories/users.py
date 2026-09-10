@@ -166,3 +166,24 @@ class UserRepository:
             .where(UserRow.id == user_id)
             .values(last_lat=latitude, last_lng=longitude, last_location_at=datetime.now(UTC))
         )
+
+    async def get_agent_location_with_time(
+        self, user_id: str
+    ) -> tuple[float, float, datetime] | None:
+        """Same data as get_agent_location, plus the freshness timestamp —
+        kept as a separate method rather than changing get_agent_location's
+        return shape, since that one is unpacked positionally as exactly two
+        floats in DeliveryService.list_requests."""
+        row = await self.session.get(UserRow, user_id)
+        if row is None or row.last_lat is None or row.last_lng is None or row.last_location_at is None:
+            return None
+        return (row.last_lat, row.last_lng, row.last_location_at)
+
+    async def list_delivery_agent_ids(self) -> list[str]:
+        """Every delivery agent, regardless of location — used only to fan
+        out a "new order available" push. The in-app Requests list still
+        does the real distance filtering (see DeliveryService.list_requests);
+        a push is just an attention-getter, not the source of truth for who
+        can take the job."""
+        stmt = select(UserRow.id).where(UserRow.role == Role.DELIVERY_AGENT.value)
+        return list((await self.session.execute(stmt)).scalars().all())

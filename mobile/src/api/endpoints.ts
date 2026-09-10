@@ -70,6 +70,11 @@ export const paymentsApi = {
     api.get<OrderView>(`/payments/link-callback?${new URLSearchParams(params).toString()}`, true),
 };
 
+export const notificationsApi = {
+  registerToken: (token: string, platform: 'android' | 'ios' = 'android') =>
+    api.post<void>('/notifications/register-token', { token, platform }, { auth: true }),
+};
+
 export interface SupportTicketCreated { id: string; created_at: string }
 
 export const supportApi = {

@@ -32,6 +32,7 @@ def _to_dict(row: OrderRow) -> dict[str, Any]:
         "stock_released": row.stock_released,
         "hold_expires_at": row.hold_expires_at,
         "cancel_reason": row.cancel_reason,
+        "delivery_agent_id": row.delivery_agent_id,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "lines": [

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "754118540950",
+    "project_id": "aadya-dairy",
+    "storage_bucket": "aadya-dairy.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:754118540950:android:17adc4e52e3f93e9804cb7",
+        "android_client_info": {
+          "package_name": "com.aadhya.farmfresh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMcYojSH5-s0BpMetz4C0klEOhgAwl-MU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -16,12 +16,11 @@ import { supportApi } from '../api/endpoints';
 import { color, font, radius, shadow, size, space } from '../theme/tokens';
 import type { HelpTree } from '../support/helpTree.types';
 
-// TODO: fill in the real number and inbox once you have them — these are
-// intentionally blank rather than guessed at. Until then, tapping either
-// contact button shows a friendly "not set up yet" message instead of
-// silently opening a dialer/mail app with nothing in it.
-const SUPPORT_PHONE: string = '';
-const SUPPORT_EMAIL: string = '';
+// Customer-care contact for grievance/support — "Call us" opens the dialer,
+// "Email us" opens the mail app, both via the two helpers below. Left blank
+// until now on purpose (see callSupport/emailSupport's fallback alerts).
+const SUPPORT_PHONE: string = '+91 6301 378458';
+const SUPPORT_EMAIL: string = 'sujathaaadya@gmail.com';
 
 function callSupport() {
   if (!SUPPORT_PHONE) {

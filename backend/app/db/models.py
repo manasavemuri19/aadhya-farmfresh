@@ -382,6 +382,27 @@ class WebhookEvent(Base):
     )
 
 
+class PushToken(Base, TimestampMixin):
+    """One row per registered device (Expo push token), used to send order
+    and delivery-request notifications.
+
+    Keyed by the token itself, not an autoincrement id: Expo push tokens are
+    already globally unique strings, and re-registering the same token (a
+    reinstall, or the OS handing the same cached token back) should just
+    repoint it at whichever user is signed in now, not accumulate stale
+    duplicate rows — see PushTokenRepository.register.
+    """
+
+    __tablename__ = "push_tokens"
+    __table_args__ = (Index("ix_push_token_user", "user_id"),)
+
+    token: Mapped[str] = mapped_column(String(200), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(String(16), default="android", nullable=False)
+
+
 class SupportTicket(Base, TimestampMixin):
     """The "still stuck?" fallback at the end of the Help & Support decision
     tree, for when none of the canned answers actually resolved things.
