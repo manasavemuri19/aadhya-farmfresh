@@ -100,9 +100,8 @@ module.exports = {
       },
       // Added for FCM push notifications (project "aadya-dairy"). Safe to
       // commit — contains only public app/project identifiers, no secrets.
-      // Not wired to expo-notifications yet; that plugin entry + the actual
-      // token-registration code lands once the FCM service-account key is
-      // also uploaded to EAS (see mobile/README or ask Claude for status).
+      // Wired to expo-notifications (see the plugins array below) and the
+      // token-registration code in src/lib/pushNotifications.ts.
       googleServicesFile: './google-services.json',
       config: {
         googleMaps: {

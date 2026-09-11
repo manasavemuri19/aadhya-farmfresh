@@ -119,6 +119,14 @@ export default function TabsLayout() {
             ),
           }}
         />
+        {/* `index-1.tsx` is a stray duplicate of index.tsx that appeared in
+            this folder — most likely a cloud-sync conflict copy, not a real
+            screen. expo-router registers a tab for any file dropped into
+            (tabs)/, so it showed up as a blank third tab for every role.
+            Hidden here so it can't do that regardless of whether the file
+            itself gets deleted; delete `app/(tabs)/index-1.tsx` when
+            convenient to remove it for good. */}
+        <Tabs.Screen name="index-1" options={{ href: null }} />
       </Tabs>
 
       {activeOrders.map((order, index) => (
