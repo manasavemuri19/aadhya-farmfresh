@@ -96,7 +96,7 @@ export default function OrderTab() {
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <LinearGradient
-              colors={[color.primary, color.primaryPressed]}
+              colors={[color.primaryLight, color.primaryPressed]}
               style={[styles.headerBand, { paddingTop: insets.top + space.md }]}
             >
               <Text variant="display" style={styles.wordmark}>Aadya Dairy</Text>
@@ -164,8 +164,10 @@ const styles = StyleSheet.create({
     marginHorizontal: -space.lg,
   },
   headerBand: {
-    // Terracotta gradient — primary fading to its pressed shade, top to
-    // bottom. Same orange family as the rest of the app, just with depth.
+    // Terracotta gradient — a lighter highlight fading down into the same
+    // pressed shade used elsewhere, so it's visibly a gradient rather than
+    // reading as flat (primary and primaryPressed alone are too close in
+    // tone for that).
     paddingHorizontal: space.lg,
     paddingBottom: space.md,
   },

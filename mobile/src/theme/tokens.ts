@@ -24,6 +24,10 @@ export const color = {
   primary: '#D9642C',       // buttons, active states, price
   primaryPressed: '#BF521F',
   primarySoft: '#F7E4D6',   // tinted backgrounds
+  // Lighter highlight used only as the gradient's top stop (shop header band)
+  // — primary and primaryPressed are too close in tone to read as a gradient
+  // on their own; this gives it a visible light-to-dark range.
+  primaryLight: '#E8824F',
   onPrimary: '#FFFFFF',
 
   // Accent — leaf green

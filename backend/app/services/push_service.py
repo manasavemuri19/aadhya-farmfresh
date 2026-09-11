@@ -65,15 +65,27 @@ class PushService:
                     response.raise_for_status()
                     tickets = response.json().get("data", [])
                     for token, ticket in zip((m["to"] for m in chunk), tickets, strict=False):
-                        if (
-                            isinstance(ticket, dict)
-                            and ticket.get("status") == "error"
-                            and ticket.get("details", {}).get("error") == "DeviceNotRegistered"
-                        ):
+                        if not isinstance(ticket, dict) or ticket.get("status") != "error":
+                            continue
+                        error_code = ticket.get("details", {}).get("error")
+                        if error_code == "DeviceNotRegistered":
                             invalid.append(token)
+                        else:
+                            # Anything else (bad FCM credentials, a
+                            # misconfigured project, a malformed message) was
+                            # previously dropped on the floor here — silently
+                            # indistinguishable from a working send. Logging
+                            # it is what actually surfaces a broken FCM V1
+                            # credential upload instead of the app just never
+                            # notifying anyone with no trace of why.
+                            log.error(
+                                "push notification ticket error",
+                                extra={"error_code": error_code, "message": ticket.get("message")},
+                            )
         except Exception:
             log.exception("push notification send failed")
             return
 
+        log.info("push notifications sent", extra={"count": len(messages), "invalid": len(invalid)})
         if invalid:
             await self.tokens.delete_invalid(invalid)
