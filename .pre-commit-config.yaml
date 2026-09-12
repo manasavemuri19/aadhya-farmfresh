@@ -1,0 +1,14 @@
+# One-time setup on your machine:
+#   pip install pre-commit
+#   pre-commit install
+# After that, every `git commit` runs gitleaks on the staged changes first
+# and blocks the commit if it finds a secret — this is what actually stops
+# a credential from being committed in the first place, before it ever
+# reaches GitHub. The CI check in .github/workflows/gitleaks.yml is the
+# backstop for a commit made without this hook installed (a fresh clone, a
+# teammate, a different machine).
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

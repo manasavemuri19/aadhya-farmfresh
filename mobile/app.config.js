@@ -62,15 +62,23 @@ const GOOGLE_ANDROID_CLIENT_ID =
 
 // Google Maps Platform key (Maps SDK for Android / Directions / Geocoding),
 // restricted in Google Cloud Console to this app's package name + signing
-// keystore SHA-1 — same fallback approach as the values above. This key is
-// only ever read at native-build time (baked into the Android manifest by
-// Expo's prebuild step), unlike the others which the JS bundle also reads at
-// runtime — but the same `eas update`-doesn't-read-eas.json caveat applies
-// to keeping a real default here rather than a placeholder.
+// keystore SHA-1. This key is only ever read at native-build time (baked
+// into the Android manifest by Expo's prebuild step), unlike the others
+// which the JS bundle also reads at runtime.
+//
+// SECURITY (2026-09-12): this used to fall back to a real, hardcoded key —
+// the same "keep a working default so `eas update` never silently ships a
+// broken build" reasoning as the two client IDs above. That key leaked via
+// this public repo (it was readable in plain text in every commit) and has
+// been revoked; it must never be replaced with another literal value here.
+// The only supported sources now are a real `EAS secret`/`eas env` variable
+// or a local `.env` — see mobile/.env.example. An empty key means Maps
+// tiles won't load until one of those is configured; that is the correct,
+// visible failure mode for a credential that must never be committed again.
 const GOOGLE_MAPS_API_KEY =
   process.env.GOOGLE_MAPS_API_KEY ??
   easBuildEnv.GOOGLE_MAPS_API_KEY ??
-  '***REMOVED-ROTATE-THIS-GOOGLE-MAPS-API-KEY***';
+  '';
 
 module.exports = {
   expo: {

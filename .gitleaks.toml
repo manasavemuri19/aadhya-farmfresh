@@ -1,0 +1,20 @@
+title = "Aadya Dairy gitleaks config"
+
+# Start from gitleaks' maintained default rule set (covers AWS, GCP, generic
+# high-entropy strings, private keys, and more) and layer project-specific
+# exceptions on top.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "google-services.json's embedded Android API key"
+# Firebase's own Android API key in google-services.json is not a secret by
+# Google's design: it ships inside every APK regardless of this repo, and
+# the real access control is API restrictions (package name + SHA-1) plus
+# Firebase Security Rules, not keeping the value hidden. See:
+# https://firebase.google.com/docs/projects/api-keys
+# This allowlist is path-scoped, not value-scoped, so it stays correct if
+# the key is ever regenerated.
+paths = [
+  '''(^|/)google-services\.json$''',
+]

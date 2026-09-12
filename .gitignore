@@ -1,20 +1,50 @@
-@"
+# ---- Dependencies & caches ----
 node_modules/
 .venv/
 __pycache__/
 *.pyc
+*.py[cod]
 .pytest_cache/
+.ruff_cache/
+backend/*.egg-info/
+
+# ---- Build output ----
 .expo/
 dist/
 *.log
-*.py[cod]
-.env
-.ruff_cache/
-.DS_Store
-"@ | Out-File -Encoding utf8 .gitignore
-backend/*.egg-info/
 
+# ---- OS ----
+.DS_Store
+
+# ---- Secrets: environment files ----
+# Keep the .example files tracked — they document required variables with
+# safe placeholder values. Never commit the real file.
+.env
+.env.*
+!.env.example
+!*/.env.example
+
+# ---- Secrets: Firebase ----
 # Firebase service-account key (FCM push notifications) — sensitive private
 # key, unlike google-services.json which is safe to commit. Firebase names
 # this file like "<project-id>-firebase-adminsdk-xxxxx-xxxxxxxxxx.json".
 *firebase-adminsdk*.json
+
+# ---- Secrets: Android signing ----
+# The keystore and the plaintext passwords needed to open it. See
+# mobile/credentials.example.json for the expected shape with no real
+# values, and the mobile README for why `eas credentials` (Expo-managed
+# keys) is the recommended alternative to keeping this file at all.
+*.jks
+*.keystore
+credentials.json
+credentials/
+*.p8
+*.p12
+*.mobileprovision
+
+# ---- Anything accidentally dropped into the repo by tooling ----
+# A past commit added a "Claude outputs/" folder (chat-tool exports,
+# including a full internal security audit) straight into the tracked
+# tree. That folder does not belong in version control under any name.
+Claude outputs/
