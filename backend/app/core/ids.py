@@ -37,10 +37,5 @@ def new_support_ticket_id() -> str:
     return new_id("sup")
 
 
-def human_order_number() -> str:
-    """Short, readable reference the delivery rider and customer can say aloud."""
-    return "AD" + "".join(secrets.choice(string.digits) for _ in range(6))
-
-
 def new_otp_code(digits: int = 6) -> str:
     return "".join(secrets.choice(string.digits) for _ in range(digits))

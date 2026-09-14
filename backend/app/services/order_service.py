@@ -44,7 +44,7 @@ from app.core.errors import (
     PriceChanged,
     UpstreamError,
 )
-from app.core.ids import human_order_number, new_order_id, new_payment_id
+from app.core.ids import new_order_id, new_payment_id
 from app.domain.enums import OrderStatus, PaymentMethod, PaymentStatus
 from app.domain.order_state import CUSTOMER_CANCELLABLE, RELEASES_STOCK, assert_transition
 from app.payments.base import PaymentProvider, WebhookEvent
@@ -306,10 +306,16 @@ class OrderService:
                 }
             )
 
+        # Reserved only now that stock is held and the order is actually going
+        # to be written — next_order_number() increments a real counter row
+        # (AAD-DATA-001), so calling it any earlier would burn numbers on
+        # orders that end up rejected for being out of stock.
+        order_number = await self.orders.next_order_number()
+
         await self.orders.insert(
             {
                 "id": order_id,
-                "order_number": human_order_number(),
+                "order_number": order_number,
                 "user_id": user_id,
                 "status": status.value,
                 "lines": [

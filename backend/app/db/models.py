@@ -17,12 +17,13 @@ Notes on the modelling choices that matter:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -265,6 +266,22 @@ class OrderLine(Base):
     line_total_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     order: Mapped[Order] = relationship(back_populates="lines")
+
+
+class OrderNumberCounter(Base):
+    """Backs the daily-scoped human order number (AAD-DATA-001).
+
+    One row per calendar date, incremented atomically by
+    `OrderRepository.next_order_number` via `INSERT ... ON CONFLICT DO UPDATE
+    ... RETURNING`. That makes `AD-YYMMDD-NNNN` collision-free by
+    construction — a real change from the six-random-digits scheme this
+    replaces, which had a 50% chance of a collision after ~1,180 orders.
+    """
+
+    __tablename__ = "order_number_counters"
+
+    order_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    last_value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class OrderEvent(Base):

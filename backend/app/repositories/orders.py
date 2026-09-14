@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select, update
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Order as OrderRow
-from app.db.models import OrderEvent, OrderLine, Payment, WebhookEvent
+from app.db.models import OrderEvent, OrderLine, OrderNumberCounter, Payment, WebhookEvent
 from app.domain.enums import OrderStatus, PaymentStatus
 
 
@@ -85,6 +85,33 @@ def _loaded(stmt):
 class OrderRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def next_order_number(self, *, today: date | None = None) -> str:
+        """Atomically reserve the next human order number: `AD-YYMMDD-NNNN`.
+
+        Backed by one row per calendar date in `order_number_counters`.
+        `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` is one round trip and
+        Postgres serializes concurrent callers on that row's lock, so two
+        orders placed in the same instant still get distinct numbers — no
+        read-then-write race, and no separate uniqueness check needed. This
+        replaces AAD-DATA-001's six-random-digits scheme.
+
+        Uses UTC dates, matching every other timestamp in this codebase — the
+        rollover therefore lands at 5:30am IST rather than local midnight,
+        a known, deliberately small simplification rather than an oversight.
+        """
+        order_date = today or datetime.now(UTC).date()
+        stmt = (
+            insert(OrderNumberCounter)
+            .values(order_date=order_date, last_value=1)
+            .on_conflict_do_update(
+                index_elements=[OrderNumberCounter.order_date],
+                set_={"last_value": OrderNumberCounter.last_value + 1},
+            )
+            .returning(OrderNumberCounter.last_value)
+        )
+        seq = (await self.session.execute(stmt)).scalar_one()
+        return f"AD-{order_date:%y%m%d}-{seq:04d}"
 
     async def insert(self, order: dict[str, Any]) -> None:
         """Persist an order, its lines, its first event and its payment row.
