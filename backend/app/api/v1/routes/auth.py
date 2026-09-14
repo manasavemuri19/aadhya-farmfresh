@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import CurrentUser, get_auth_service, get_user_repo
+from app.api.route import TransactionalRoute
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
     Address,
@@ -16,7 +17,7 @@ from app.schemas.auth import (
 )
 from app.services.auth_service import AuthService
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=TransactionalRoute)
 
 AuthSvc = Annotated[AuthService, Depends(get_auth_service)]
 Users = Annotated[UserRepository, Depends(get_user_repo)]

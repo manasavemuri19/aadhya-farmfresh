@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
+from app.api.route import TransactionalRoute
 from app.core.config import settings
 from app.db import base as db
 
-router = APIRouter(tags=["health"])
+# Neither route here writes anything, so TransactionalRoute is a no-op in
+# practice — set for consistency with every other router, so "does this
+# router touch the database" is never a question anyone has to answer
+# before adding a route to it.
+router = APIRouter(tags=["health"], route_class=TransactionalRoute)
 
 
 @router.get("/health/live", summary="Liveness — is the process up")

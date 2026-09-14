@@ -5,10 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.deps import get_catalog_service
+from app.api.route import TransactionalRoute
 from app.schemas.catalog import CatalogResponse, ProductView
 from app.services.catalog_service import CatalogService
 
-router = APIRouter(prefix="/catalog", tags=["catalog"])
+router = APIRouter(prefix="/catalog", tags=["catalog"], route_class=TransactionalRoute)
 
 Catalog = Annotated[CatalogService, Depends(get_catalog_service)]
 

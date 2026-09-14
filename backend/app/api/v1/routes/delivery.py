@@ -7,10 +7,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.api.deps import DeliveryAgentUser, get_delivery_service
+from app.api.route import TransactionalRoute
 from app.schemas.delivery import AgentLocationUpdate, DeliveryOrderView, UpdateDeliveryStatusRequest
 from app.services.delivery_service import DeliveryService
 
-router = APIRouter(prefix="/delivery", tags=["delivery"])
+router = APIRouter(prefix="/delivery", tags=["delivery"], route_class=TransactionalRoute)
 
 Delivery = Annotated[DeliveryService, Depends(get_delivery_service)]
 

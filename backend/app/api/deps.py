@@ -11,7 +11,7 @@ from typing import Annotated
 
 from collections.abc import AsyncIterator
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Forbidden, Unauthorized
@@ -36,22 +36,28 @@ from app.services.push_service import PushService
 from app.services.support_service import SupportService
 
 
-async def db_session() -> AsyncIterator[AsyncSession]:
+async def db_session(request: Request) -> AsyncIterator[AsyncSession]:
     """One transaction per request.
 
-    Everything a request writes commits together or not at all. A handler that
-    raises rolls the whole thing back, which is why the checkout path needs no
-    compensation logic of its own.
+    Everything a request writes commits together or not at all. A handler
+    that raises rolls the whole thing back, which is why the checkout path
+    needs no compensation logic of its own.
+
+    This dependency only creates the session and hands it off — it does not
+    commit, roll back, or close it. That used to happen right here, in the
+    code after `yield`, but FastAPI runs that code during dependency
+    teardown, which is *after* the route's Response has already been built.
+    A commit failure there had nowhere to go (AAD-REL-001): the success
+    response could already be on its way out. `TransactionalRoute`
+    (api/route.py) now owns commit/rollback/close, wrapped around the whole
+    endpoint call instead, so a commit failure is a normal exception raised
+    before any response is handed off. Every router that resolves this
+    dependency (directly or via a repository) uses
+    `route_class=TransactionalRoute` for exactly this reason.
     """
     session = get_session_factory()()
-    try:
-        yield session
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+    request.state.db_session = session
+    yield session
 
 
 DB = Annotated[AsyncSession, Depends(db_session)]

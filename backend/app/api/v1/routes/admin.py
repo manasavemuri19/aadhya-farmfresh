@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import StaffUser, get_order_repo, get_order_service, get_product_repo
+from app.api.route import TransactionalRoute
 from app.core.errors import NotFound, ValidationError
 from app.domain.enums import OrderStatus
 from app.repositories.orders import OrderRepository
@@ -20,7 +21,7 @@ from app.schemas.catalog import Product
 from app.schemas.order import AdjustStockRequest, OrderView, SetPriceRequest, UpdateOrderStatusRequest
 from app.services.order_service import OrderService
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], route_class=TransactionalRoute)
 
 Products = Annotated[ProductRepository, Depends(get_product_repo)]
 Orders = Annotated[OrderService, Depends(get_order_service)]

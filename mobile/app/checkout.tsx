@@ -19,7 +19,7 @@ import type { Address, PaymentMethod } from '../src/api/types';
 /** Stable per checkout attempt. Survives re-renders and retries, so a dropped
  *  response cannot become a second order. */
 function useIdempotencyKey(): string {
-  const ref = useRef<string>();
+  const ref = useRef<string | undefined>(undefined);
   if (!ref.current) {
     ref.current = `checkout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }

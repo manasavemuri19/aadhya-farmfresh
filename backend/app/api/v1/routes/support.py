@@ -7,10 +7,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.api.deps import CurrentUser, get_support_service
+from app.api.route import TransactionalRoute
 from app.schemas.support import SupportTicketCreate, SupportTicketCreated
 from app.services.support_service import SupportService
 
-router = APIRouter(prefix="/support", tags=["support"])
+router = APIRouter(prefix="/support", tags=["support"], route_class=TransactionalRoute)
 
 Support = Annotated[SupportService, Depends(get_support_service)]
 

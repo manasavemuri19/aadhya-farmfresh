@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import CurrentUser, get_order_service, idempotency_key
+from app.api.route import TransactionalRoute
 from app.schemas.order import (
     CancelOrderRequest,
     CartInput,
@@ -15,7 +16,7 @@ from app.schemas.order import (
 )
 from app.services.order_service import OrderService
 
-router = APIRouter(tags=["orders"])
+router = APIRouter(tags=["orders"], route_class=TransactionalRoute)
 
 Orders = Annotated[OrderService, Depends(get_order_service)]
 

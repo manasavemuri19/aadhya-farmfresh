@@ -5,10 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import CurrentUser, get_push_token_repo
+from app.api.route import TransactionalRoute
 from app.repositories.push_tokens import PushTokenRepository
 from app.schemas.notifications import RegisterPushToken
 
-router = APIRouter(prefix="/notifications", tags=["notifications"])
+router = APIRouter(prefix="/notifications", tags=["notifications"], route_class=TransactionalRoute)
 
 PushTokens = Annotated[PushTokenRepository, Depends(get_push_token_repo)]
 

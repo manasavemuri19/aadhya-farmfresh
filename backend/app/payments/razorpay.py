@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import razorpay
@@ -41,7 +42,13 @@ class RazorpayProvider(PaymentProvider):
         self._webhook_secret = settings.razorpay_webhook_secret.encode()
 
     async def create_order(
-        self, *, amount_paise: int, currency: str, receipt: str, notes: dict[str, str]
+        self,
+        *,
+        amount_paise: int,
+        currency: str,
+        receipt: str,
+        notes: dict[str, str],
+        expires_at: datetime | None = None,
     ) -> ProviderOrder:
         """Creates a Razorpay **Payment Link**, not an Orders-API order.
 
@@ -58,19 +65,28 @@ class RazorpayProvider(PaymentProvider):
         `reference_id` is set to our own order id, so the redirect callback
         (and any later lookup) can find the order without needing to persist
         a separate mapping.
+
+        `expires_at`, when given, becomes the link's own `expire_by` — the
+        same instant the order's payment hold expires — so the app and
+        Razorpay cannot disagree about when a payment is dead (AAD-PAY-006 /
+        AAD-PAY-014). Partial payment is disabled explicitly rather than
+        left to the default, since nothing downstream is built to reconcile
+        a payment that only covers part of the order.
         """
+        body: dict[str, Any] = {
+            "amount": amount_paise,
+            "currency": currency,
+            "description": "Aadya Dairy order",
+            "reference_id": receipt,
+            "notes": notes,
+            "callback_url": settings.razorpay_callback_url,
+            "callback_method": "get",
+            "partial_payment": False,
+        }
+        if expires_at is not None:
+            body["expire_by"] = int(expires_at.timestamp())
         try:
-            link = self._client.payment_link.create(
-                {
-                    "amount": amount_paise,
-                    "currency": currency,
-                    "description": "Aadya Dairy order",
-                    "reference_id": receipt,
-                    "notes": notes,
-                    "callback_url": settings.razorpay_callback_url,
-                    "callback_method": "get",
-                }
-            )
+            link = self._client.payment_link.create(body)
         except Exception as exc:
             log.exception("razorpay payment link creation failed", extra={"receipt": receipt})
             raise UpstreamError("Could not start the payment. Try again.") from exc
@@ -123,21 +139,92 @@ class RazorpayProvider(PaymentProvider):
 
         payload: dict[str, Any] = json.loads(body)
         event_type = payload.get("event", "")
-        entity = (
-            payload.get("payload", {}).get("payment", {}).get("entity")
-            or payload.get("payload", {}).get("refund", {}).get("entity")
-            or payload.get("payload", {}).get("order", {}).get("entity")
-            or {}
+        inner = payload.get("payload", {})
+        payment_entity = inner.get("payment", {}).get("entity") or {}
+        payment_link_entity = inner.get("payment_link", {}).get("entity") or {}
+        refund_entity = inner.get("refund", {}).get("entity") or {}
+        order_entity = inner.get("order", {}).get("entity") or {}
+
+        # A `payment_link.*` event carries the Payment Link's own entity
+        # alongside a *different* Razorpay Order object's payment entity
+        # (auto-created internally for the link) — that payment entity's
+        # `order_id` does not refer to anything this app stored, and using
+        # it here was AAD-PAY-007 defect 3. The payment_link entity's own
+        # `id` is what create_order stored as provider_order_id, so it takes
+        # priority whenever it is present.
+        if payment_link_entity:
+            provider_order_id = payment_link_entity.get("id")
+        elif order_entity:
+            provider_order_id = order_entity.get("id")
+        elif payment_entity:
+            provider_order_id = payment_entity.get("order_id")
+        else:
+            provider_order_id = None
+
+        # `reference_id` is set to our own order id at link creation (see
+        # create_order) — when the gateway hands it back, matching on it
+        # directly is more robust than matching on a gateway-assigned id
+        # whose provenance has to be inferred, per the audit's own guidance.
+        order_id = payment_link_entity.get("reference_id") if payment_link_entity else None
+
+        provider_payment_id = (
+            (payment_entity.get("id") if payment_entity else None)
+            or (refund_entity.get("payment_id") if refund_entity else None)
         )
+
+        amount_paise = None
+        if payment_entity:
+            amount_paise = payment_entity.get("amount")
+        elif payment_link_entity:
+            amount_paise = payment_link_entity.get("amount_paid")
+        elif refund_entity:
+            amount_paise = refund_entity.get("amount")
+        elif order_entity:
+            amount_paise = order_entity.get("amount")
+
         return WebhookEvent(
             # Razorpay sends this header-derived id; fall back to a body hash so
             # the replay guard still has a stable key.
             event_id=payload.get("id") or hashlib.sha256(body).hexdigest(),
             event_type=event_type,
-            provider_order_id=entity.get("order_id") or entity.get("id"),
-            provider_payment_id=entity.get("payment_id") or entity.get("id"),
-            amount_paise=entity.get("amount"),
+            provider_order_id=provider_order_id,
+            provider_payment_id=provider_payment_id,
+            amount_paise=amount_paise,
             raw=payload,
+            order_id=order_id,
+        )
+
+    async def poll_status(self, *, provider_order_id: str) -> WebhookEvent | None:
+        """Fetch a Payment Link directly instead of waiting for the webhook
+        or the redirect — see `PaymentProvider.poll_status`. `provider_order_id`
+        here is the link id stored on the order's payment row.
+        """
+        try:
+            link = self._client.payment_link.fetch(provider_order_id)
+        except Exception as exc:
+            log.exception(
+                "razorpay payment link status poll failed",
+                extra={"provider_order_id": provider_order_id},
+            )
+            raise UpstreamError("Could not reach the payment gateway.") from exc
+
+        if link.get("status") != "paid":
+            return None
+
+        payments_on_link = link.get("payments") or []
+        provider_payment_id = None
+        if payments_on_link:
+            last = payments_on_link[-1]
+            provider_payment_id = last.get("payment_id") or last.get("id")
+
+        return WebhookEvent(
+            event_id=f"poll_{link.get('id', provider_order_id)}",
+            event_type="payment_link.paid",
+            provider_order_id=link.get("id", provider_order_id),
+            provider_payment_id=provider_payment_id,
+            amount_paise=link.get("amount_paid"),
+            raw={"source": "poll_status", "status": link.get("status")},
+            order_id=link.get("reference_id"),
         )
 
     async def refund(

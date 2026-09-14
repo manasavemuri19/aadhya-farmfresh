@@ -262,9 +262,12 @@ class OrderService:
         order_id = new_order_id()
         now = datetime.now(UTC)
         is_cod = request.payment_method is PaymentMethod.COD
+        hold_expires_at = None if is_cod else now + PAYMENT_HOLD
 
         # Gateway call happens before the write, so a slow gateway never holds
-        # locks on inventory rows.
+        # locks on inventory rows. The same hold_expires_at is handed to the
+        # gateway as its own expiry (AAD-PAY-006 / AAD-PAY-014), so this app
+        # and the gateway can never disagree about when the payment is dead.
         provider_order = None
         if not is_cod:
             provider_order = await self.payments.create_order(
@@ -272,6 +275,7 @@ class OrderService:
                 currency=settings.currency,
                 receipt=order_id,
                 notes={"order_id": order_id, "user_id": user_id},
+                expires_at=hold_expires_at,
             )
 
         # --- everything below is one transaction, committed by the caller ---
@@ -330,7 +334,7 @@ class OrderService:
                 "notes": request.notes,
                 "eta_minutes": cart.eta_minutes,
                 "stock_released": False,
-                "hold_expires_at": None if is_cod else now + PAYMENT_HOLD,
+                "hold_expires_at": hold_expires_at,
                 "timeline": timeline,
                 "payment": {
                     "id": new_payment_id(),
@@ -377,13 +381,24 @@ class OrderService:
         is a no-op when the order already sits in the target state, because
         gateways deliver the same event more than once as a matter of routine.
         """
-        if not event.provider_order_id:
-            log.warning("webhook without provider order id", extra={"event": event.event_type})
-            return
+        # Prefer the id the event told us directly is our own order (e.g. a
+        # Payment Link's reference_id) over matching on a gateway-assigned
+        # id — see WebhookEvent.order_id and AAD-PAY-007.
+        order = await self.orders.get(event.order_id) if event.order_id else None
 
-        order = await self.orders.get_by_provider_order_id(event.provider_order_id)
+        if order is None:
+            if not event.provider_order_id:
+                log.warning(
+                    "webhook without provider order id", extra={"event": event.event_type}
+                )
+                return
+            order = await self.orders.get_by_provider_order_id(event.provider_order_id)
+
         if not order:
-            log.warning("webhook for unknown order", extra={"po": event.provider_order_id})
+            log.warning(
+                "webhook for unknown order",
+                extra={"order_id": event.order_id, "po": event.provider_order_id},
+            )
             return
 
         order_id = order["id"]
@@ -417,6 +432,37 @@ class OrderService:
                 if updated:
                     await self._notify_customer(updated, OrderStatus.CONFIRMED)
                     await self._notify_agents_new_order(updated)
+            elif current is OrderStatus.CANCELLED:
+                # A capture landing after the order was already cancelled
+                # (AAD-PAY-001) — the payment hold's 15 minutes were shorter
+                # than this payment actually took to clear. The money is
+                # real and the order is not coming back, so the correct
+                # outcome is an automatic refund, not a payment silently
+                # left CAPTURED against a CANCELLED order forever. This is a
+                # backstop for the case the poll-and-reconcile check in
+                # `release_expired_holds` (AAD-PAY-006) already narrowed to
+                # a brief race window, not a replacement for it.
+                log.error(
+                    "payment captured after the order was already cancelled — "
+                    "refunding automatically",
+                    extra={"order": order_id},
+                )
+                # Re-fetch so the refund path sees the CAPTURED status and
+                # provider_payment_id just written above, not the stale
+                # snapshot fetched at the top of this method.
+                refreshed = await self.orders.get(order_id)
+                if refreshed is not None:
+                    await self._cancel(
+                        refreshed,
+                        note="Payment captured after the order was cancelled — "
+                        "refunded automatically",
+                        actor="payment_gateway",
+                        target_status=OrderStatus.REFUNDED,
+                    )
+            # Any other current status (CONFIRMED, PACKED, OUT_FOR_DELIVERY,
+            # DELIVERED, REFUNDED) is a routine duplicate delivery of a
+            # capture already applied — payment status is now accurate and
+            # there is nothing else to do.
             return
 
         if event.is_failure:
@@ -589,13 +635,39 @@ class OrderService:
         return self._to_view(updated)
 
     async def release_expired_holds(self, *, limit: int = 100) -> int:
-        """Sweep abandoned checkouts back onto the shelf."""
+        """Sweep abandoned checkouts back onto the shelf.
+
+        Before cancelling anything, ask the gateway directly whether the
+        payment actually went through (AAD-PAY-006). Neither the webhook nor
+        the redirect callback is guaranteed to arrive — the whole point of
+        this finding — so cancelling on the timer alone risks cancelling an
+        order that was, in fact, paid for. Only orders the gateway also
+        confirms as unpaid are cancelled here; an order the gateway reports
+        as paid is confirmed instead, exactly as a capture webhook would.
+        """
         stale = await self.orders.find_expired_holds(limit=limit)
+        released = 0
         for order in stale:
+            provider_order_id = (order.get("payment") or {}).get("provider_order_id")
+            if provider_order_id:
+                try:
+                    event = await self.payments.poll_status(provider_order_id=provider_order_id)
+                except UpstreamError:
+                    # Can't confirm either way right now — leaving the hold in
+                    # place for the next sweep is safer than guessing.
+                    log.warning(
+                        "could not reach gateway to reconcile an expiring hold",
+                        extra={"order": order["id"]},
+                    )
+                    continue
+                if event is not None:
+                    await self.apply_webhook(event)
+                    continue
             await self._cancel(order, note="Payment not completed in time", actor="system")
-        if stale:
-            log.info("expired payment holds released", extra={"count": len(stale)})
-        return len(stale)
+            released += 1
+        if released:
+            log.info("expired payment holds released", extra={"count": released})
+        return released
 
     # ---------- reads ----------
 

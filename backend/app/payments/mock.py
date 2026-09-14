@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime
 from typing import Any
 
 from app.core.errors import PaymentFailed
@@ -29,8 +30,17 @@ class MockPaymentProvider(PaymentProvider):
     name = "mock"
 
     async def create_order(
-        self, *, amount_paise: int, currency: str, receipt: str, notes: dict[str, str]
+        self,
+        *,
+        amount_paise: int,
+        currency: str,
+        receipt: str,
+        notes: dict[str, str],
+        expires_at: datetime | None = None,
     ) -> ProviderOrder:
+        # The mock provider has no gateway-side expiry to set — orders are
+        # confirmed synchronously via /payments/mock/complete in tests and
+        # local dev, never by a timer. Accepted for interface parity only.
         provider_order_id = new_id("mockord", 14)
         return ProviderOrder(
             provider=self.name,
@@ -71,6 +81,13 @@ class MockPaymentProvider(PaymentProvider):
             amount_paise=payload.get("amount"),
             raw=payload,
         )
+
+    async def poll_status(self, *, provider_order_id: str) -> WebhookEvent | None:
+        """The mock provider has no external gateway to poll — in tests and
+        local dev, confirmation always arrives synchronously through
+        `/payments/mock/complete` instead, so there is nothing a poll could
+        ever discover that hasn't already been applied. Always `None`."""
+        return None
 
     async def refund(
         self, *, provider_payment_id: str, amount_paise: int, notes: dict[str, str]
