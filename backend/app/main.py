@@ -26,9 +26,15 @@ SWEEP_INTERVAL_SECONDS = 120
 async def _housekeeping(app: FastAPI) -> None:
     """Background maintenance.
 
-    Two jobs on one timer: reclaim stock held by abandoned checkouts, and
-    delete expired OTP challenges and idempotency keys. Postgres has no TTL
-    index, so that cleanup is explicit rather than automatic.
+    Four jobs on one timer: reclaim stock held by abandoned checkouts,
+    process any refunds queued against the gateway (AAD-PAY-003 — cancel and
+    force-refund commit the order state change immediately but never call
+    Razorpay inline, so this is where that call actually happens; AAD-PAY-005's
+    amount-mismatch refunds are the same deferred-gateway-call shape), and
+    delete expired idempotency keys and refresh-token rows (AAD-SEC-002 —
+    once a row's `expires_at` has passed it has no further purpose, not even
+    for reuse detection). Postgres has no TTL index, so that cleanup is
+    explicit rather than automatic.
 
     A single in-process loop is right for one or two instances. If this ever
     runs on many replicas, move it behind an advisory lock or a scheduled job
@@ -38,8 +44,9 @@ async def _housekeeping(app: FastAPI) -> None:
     from app.payments import get_payment_provider
     from app.repositories.idempotency import IdempotencyRepository
     from app.repositories.orders import OrderRepository
-    from app.repositories.otp import OtpRepository
     from app.repositories.products import ProductRepository
+    from app.repositories.refresh_tokens import RefreshTokenRepository
+    from app.repositories.support import SupportRepository
     from app.services.order_service import OrderService
 
     while True:
@@ -51,10 +58,13 @@ async def _housekeeping(app: FastAPI) -> None:
                     OrderRepository(session),
                     IdempotencyRepository(session),
                     get_payment_provider(),
+                    support=SupportRepository(session),
                 )
                 await service.release_expired_holds()
-                await OtpRepository(session).delete_expired()
+                await service.process_pending_refunds()
+                await service.process_amount_mismatches()
                 await IdempotencyRepository(session).delete_expired()
+                await RefreshTokenRepository(session).delete_expired()
         except asyncio.CancelledError:
             raise
         except Exception:

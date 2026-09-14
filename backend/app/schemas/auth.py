@@ -21,31 +21,6 @@ def normalise_phone(raw: str) -> str:
     return f"+91{digits}"
 
 
-class PhoneField(Schema):
-    phone: str
-
-    @field_validator("phone")
-    @classmethod
-    def _normalise(cls, v: str) -> str:
-        return normalise_phone(v)
-
-
-class OtpRequest(PhoneField):
-    pass
-
-
-class OtpRequestResponse(Schema):
-    sent: bool
-    expires_in_seconds: int
-    resend_after_seconds: int
-    # Populated only when OTP_DEBUG_ECHO is on (local and staging).
-    debug_code: str | None = None
-
-
-class OtpVerify(PhoneField):
-    code: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
-
-
 class TokenPair(Schema):
     access_token: str
     refresh_token: str
@@ -79,8 +54,20 @@ class UserProfile(Schema):
 
 class UpdateProfile(Schema):
     name: str | None = Field(default=None, max_length=80)
+    # AAD-SEC-009: OtpRequest/OtpVerify used to be the only schemas that
+    # normalised a phone number — this is the path people actually use now
+    # that login is Google-only, and it accepted any 16 characters. Runs the
+    # same `normalise_phone` login used to, so "not a number", "<script>",
+    # or a non-Indian number are rejected here exactly as they always were
+    # there, rather than stored verbatim in the one field used to actually
+    # reach a customer about their delivery.
     phone: str | None = Field(default=None, max_length=16)
     address: Address | None = None
+
+    @field_validator("phone")
+    @classmethod
+    def _normalise_phone(cls, v: str | None) -> str | None:
+        return normalise_phone(v) if v is not None else None
 
 
 class GoogleSignInRequest(Schema):

@@ -22,6 +22,7 @@ def _to_dict(user: UserRow) -> dict[str, Any]:
         "google_sub": user.google_sub,
         "name": user.name,
         "role": user.role,
+        "status": user.status,
         "addresses": [
             {
                 "label": a.label,
@@ -94,7 +95,7 @@ class UserRepository:
         return user
 
     async def get_or_create_by_google(
-        self, *, google_sub: str, email: str, name: str
+        self, *, google_sub: str, email: str | None, name: str
     ) -> dict[str, Any]:
         """Same insert-or-ignore shape as phone sign-in, keyed on google_sub
         instead. `name` is only applied on first creation — an existing

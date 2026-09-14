@@ -37,5 +37,5 @@ def new_support_ticket_id() -> str:
     return new_id("sup")
 
 
-def new_otp_code(digits: int = 6) -> str:
-    return "".join(secrets.choice(string.digits) for _ in range(digits))
+def new_refresh_token_id() -> str:
+    return new_id("rtok")

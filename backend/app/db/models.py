@@ -73,6 +73,11 @@ class User(Base, TimestampMixin):
     email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     name: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     role: Mapped[str] = mapped_column(String(16), default="customer", nullable=False)
+    # AAD-SEC-002: checked on refresh and by the privileged-role dependencies
+    # (require_staff/require_admin/require_delivery_agent) — a suspended or
+    # deleted account is refused even though its still-valid access token
+    # would otherwise pass current_user unchanged for up to 30 minutes.
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Only meaningful for role == "delivery_agent": where the delivery app
@@ -324,6 +329,11 @@ class Payment(Base, TimestampMixin):
     # here, every later GET /orders/{id} has no way to get it back, and
     # "Open payment page" is stuck disabled forever.
     checkout_payload: Mapped[dict | None] = mapped_column(JSONB)
+    # AAD-PAY-005: set only while status == AMOUNT_MISMATCH — the amount the
+    # gateway actually reported captured, which is what gets refunded (not
+    # `amount_paise` above, which is what we expected and is what a normal
+    # refund would use).
+    received_amount_paise: Mapped[int | None] = mapped_column(BigInteger)
 
     order: Mapped[Order] = relationship(back_populates="payment")
 
@@ -345,21 +355,43 @@ class StockLedger(Base):
     )
 
 
-class OtpChallenge(Base):
-    __tablename__ = "otp_challenges"
-    __table_args__ = (Index("ix_otp_expires", "expires_at"),)
+class RefreshToken(Base):
+    """Server-side record of every refresh token issued, so one can actually
+    be revoked (AAD-SEC-002) — a bare JWT, however short-lived, cannot be.
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    phone: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
+    Rows are never deleted, only marked `revoked_at` — the history is what
+    makes reuse detection possible. `token_hash` is a SHA-256 of the raw
+    token, not the token itself: this table being read (a DB dump, a stray
+    log) must never be enough on its own to replay a session.
+    """
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        Index("ix_refresh_tokens_user", "user_id"),
+        Index("ix_refresh_tokens_expires", "expires_at"),
+    )
+
+    jti: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # Set on first successful match. The row is kept (not deleted) for a short
-    # grace window after that — see verify_and_consume for why.
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set the moment this token is used for anything: logout, a normal
+    # rotation, or a reuse-detected family revocation. NULL means "still a
+    # live, usable session."
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set only when revoked *by rotation* (a normal refresh). Populated means
+    # "this exact token was legitimately exchanged once" — seeing it
+    # presented again, after that, is the reuse signal that revokes the
+    # whole family. Revoked by logout instead, this stays NULL: an
+    # intentional sign-out is not theft and must not look like one.
+    replaced_by: Mapped[str | None] = mapped_column(String(40))
+    device_label: Mapped[str | None] = mapped_column(String(80))
+    last_used_ip: Mapped[str | None] = mapped_column(String(64))
 
 
 class IdempotencyKey(Base):

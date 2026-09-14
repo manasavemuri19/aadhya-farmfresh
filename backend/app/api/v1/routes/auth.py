@@ -32,14 +32,36 @@ async def google_sign_in(body: GoogleSignInRequest, svc: AuthSvc) -> dict:
 # Phone + OTP login has been retired in favour of Google sign-in as the only
 # entry point — see AuthService for why: get_or_create_by_phone relied on
 # phone being a unique column, and phone is now plain delivery contact info,
-# not a login identity, so it can't safely stay unique. The OTP repository,
-# its idempotent-replay logic, and its tests are left in place (not deleted)
-# in case phone login is ever wanted again — only the routes are gone.
+# not a login identity, so it can't safely stay unique. AAD-QUAL-001: the OTP
+# repository, service methods, settings and tests that used to sit here
+# "in case phone login is ever wanted again" are deleted, not just the
+# routes — see the fix write-up for why. Recoverable from git history
+# (this commit) if phone login is ever deliberately rebuilt.
 
 
 @router.post("/refresh", response_model=TokenPair)
 async def refresh(body: RefreshRequest, svc: AuthSvc) -> TokenPair:
     return await svc.refresh(body.refresh_token)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(body: RefreshRequest, svc: AuthSvc) -> None:
+    """AAD-SEC-002: there used to be no way to end a session server-side at
+    all — `signOut()` on the client only ever cleared the local keychain.
+    Revokes the one session this refresh token belongs to; deliberately
+    unauthenticated (no CurrentUser) because the whole point is to let a
+    client whose access token has already expired still sign out cleanly.
+    """
+    await svc.logout(body.refresh_token)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(principal: CurrentUser, svc: AuthSvc) -> None:
+    """The "sign out of everywhere" button — every refresh token this user
+    has is revoked immediately. Requires a currently-valid access token,
+    unlike `/logout`: this is a decision to make about the account, not a
+    routine sign-out, so it stays behind normal authentication."""
+    await svc.logout_all(principal.user_id)
 
 
 @router.get("/me", response_model=UserProfile)

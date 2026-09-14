@@ -36,14 +36,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-every-environment"
     jwt_algorithm: str = "HS256"
     access_token_ttl_min: int = 30
-    refresh_token_ttl_days: int = 60
-    otp_ttl_seconds: int = 300
-    otp_max_attempts: int = 5
-    otp_resend_cooldown_seconds: int = 45
-    # How long a just-used correct code stays valid for an identical retry —
-    # covers the client timing out after the server already succeeded.
-    otp_consumed_grace_seconds: int = 120
-    otp_debug_echo: bool = False
+    # AAD-SEC-002: cut from 60 to 30 days, and — unlike before — this is now
+    # a sliding window rather than a fixed one: every refresh rotates in a
+    # fresh 30-day token (see AuthService.refresh), so a session that keeps
+    # being used never actually hits this ceiling; one that goes quiet does.
+    refresh_token_ttl_days: int = 30
 
     # Payments
     payment_provider: Literal["mock", "razorpay"] = "mock"
@@ -114,8 +111,6 @@ class Settings(BaseSettings):
         problems: list[str] = []
         if self.jwt_secret == "change-me-in-every-environment" or len(self.jwt_secret) < 32:
             problems.append("JWT_SECRET must be unique and at least 32 characters")
-        if self.otp_debug_echo:
-            problems.append("OTP_DEBUG_ECHO must be false")
         if self.payment_provider == "mock":
             problems.append("PAYMENT_PROVIDER must not be 'mock'")
         if self.payment_provider == "razorpay" and not (

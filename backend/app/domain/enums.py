@@ -13,6 +13,15 @@ class Role(StrEnum):
     DELIVERY_AGENT = "delivery_agent"
 
 
+class UserStatus(StrEnum):
+    """AAD-SEC-002: checked on refresh and by the privileged-role
+    dependencies — see `User.status` in db/models.py."""
+
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
 class OrderStatus(StrEnum):
     PENDING_PAYMENT = "pending_payment"
     CONFIRMED = "confirmed"
@@ -29,6 +38,18 @@ class PaymentStatus(StrEnum):
     CAPTURED = "captured"
     FAILED = "failed"
     REFUNDED = "refunded"
+    # AAD-PAY-003: a cancel/force-refund has committed and released stock,
+    # but the actual gateway refund call happens later, out of that
+    # request's transaction — this marks the gap between the two so it is
+    # visible and retryable rather than silent.
+    REFUND_PENDING = "refund_pending"
+    # AAD-PAY-005: a capture webhook whose amount doesn't match the order
+    # total. The money is already at the gateway, so this isn't a status
+    # nothing-happened — it flags the payment for an automatic refund (via
+    # the same out-of-transaction sweep REFUND_PENDING uses, since it's the
+    # same kind of gateway call) and for a human to look at, because a
+    # mismatch is either a gateway bug or an attack.
+    AMOUNT_MISMATCH = "amount_mismatch"
 
 
 class PaymentMethod(StrEnum):

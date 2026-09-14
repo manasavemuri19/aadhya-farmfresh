@@ -59,8 +59,12 @@ def issue_access_token(user_id: str, *, role: str = "customer") -> str:
     )
 
 
-def issue_refresh_token(user_id: str) -> str:
-    return _issue(user_id, "refresh", timedelta(days=settings.refresh_token_ttl_days))
+def issue_refresh_token(user_id: str, *, jti: str) -> str:
+    # AAD-SEC-002: `jti` is what lets a single refresh token be looked up,
+    # rotated and revoked server-side — see RefreshTokenRepository. Required,
+    # not optional: every refresh token issued must be trackable, or the
+    # revocation store this claim exists for has nothing to key on.
+    return _issue(user_id, "refresh", timedelta(days=settings.refresh_token_ttl_days), jti=jti)
 
 
 def decode_token(token: str, *, expected_type: TokenType) -> dict[str, Any]:
