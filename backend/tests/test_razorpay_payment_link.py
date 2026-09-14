@@ -1,10 +1,19 @@
-"""Real Razorpay Payment Link integration — signature verification and the
-redirect-callback endpoint that confirms the order.
+"""Real Razorpay Payment Link callback — the signature formula in isolation.
 
 No live Razorpay account is exercised here (none exists yet with real
 credentials) — these tests use a fixed fake secret and prove the exact
-cryptographic formula and endpoint wiring are correct, so the only thing
-left once real keys arrive is configuration, not code.
+cryptographic formula is correct: which fields go into the signed message,
+in which order, and that a tampered or mismatched field fails verification.
+
+This file proves the formula only, not the endpoint. Every test below calls
+`provider.verify_payment_link_callback(...)` directly — nothing here sends a
+request. The `GET /payments/link-callback` route itself (query parameter
+wiring, the conditional webhook application, the response body) and the
+`POST /payments/webhook` route (raw-body HMAC verification, the replay
+guard) are covered end-to-end, over real ASGI requests, in
+`test_payment_endpoints.py` (AAD-OPS-015). `test_payment_link_confirmation.py`
+covers `parse_webhook` → `apply_webhook` at the service layer, one level
+below the route but still short of an actual request.
 """
 
 from __future__ import annotations
