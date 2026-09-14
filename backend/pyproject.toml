@@ -18,6 +18,11 @@ dependencies = [
     "python-multipart>=0.0.12",
     "razorpay>=1.4",
     "google-auth>=2.35",
+    # Already pulled in transitively by razorpay, but AAD-PAY-008's
+    # _TimeoutSession subclasses requests.Session directly — imported by our
+    # own code now, not just by the SDK, so it's declared explicitly rather
+    # than relied on as someone else's dependency.
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +32,7 @@ dev = [
     "aiosqlite>=0.20",
     "ruff>=0.7",
     "mypy>=1.13",
+    "types-requests>=2.32",
 ]
 
 [tool.setuptools.packages.find]

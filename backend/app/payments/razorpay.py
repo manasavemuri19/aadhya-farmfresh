@@ -13,6 +13,7 @@ money; the checkout signature only lets the app show a success screen sooner.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,6 +22,7 @@ from datetime import datetime
 from typing import Any
 
 import razorpay
+import requests
 
 from app.core.config import settings
 from app.core.errors import PaymentFailed, UpstreamError
@@ -29,14 +31,48 @@ from app.payments.base import PaymentProvider, ProviderOrder, WebhookEvent
 log = logging.getLogger(__name__)
 
 
+class _TimeoutSession(requests.Session):
+    """A `requests.Session` with a real default timeout (AAD-PAY-008).
+
+    `requests` has no built-in way to set a timeout at the session level —
+    this override is the standard workaround, applying `timeout` to any
+    request that doesn't already specify its own. It exists because
+    `razorpay.Client` builds a plain `requests.Session()` internally with no
+    timeout at all, so a hung TCP connection would otherwise wait forever —
+    and every `self.session.get/post/...` call the SDK makes routes through
+    `Session.request()` underneath, so overriding just that one method here
+    covers the whole client, including any call site added to it later.
+    """
+
+    def __init__(self, timeout: float) -> None:
+        super().__init__()
+        self._default_timeout = timeout
+
+    def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", self._default_timeout)
+        return super().request(*args, **kwargs)
+
+
 class RazorpayProvider(PaymentProvider):
     name = "razorpay"
+
+    # The `razorpay` SDK wraps `requests`, which is synchronous and, without
+    # this, has no timeout at all (`None` means wait forever). A hung
+    # connection to Razorpay would otherwise block this worker's event loop
+    # first (nothing else it's serving gets scheduled) and then, once moved
+    # off the loop below, tie up a thread-pool thread indefinitely instead —
+    # this bound stops both. 10s comfortably covers the 300ms-2s round
+    # trips this audit measured from India, with real room for a genuine
+    # slow patch, and one value for every call keeps the client's timeout
+    # behaviour uniform rather than something to remember per call site.
+    _TIMEOUT_SECONDS = 10.0
 
     def __init__(self) -> None:
         if not (settings.razorpay_key_id and settings.razorpay_key_secret):
             raise RuntimeError("Razorpay credentials are not configured")
         self._client = razorpay.Client(
-            auth=(settings.razorpay_key_id, settings.razorpay_key_secret)
+            session=_TimeoutSession(self._TIMEOUT_SECONDS),
+            auth=(settings.razorpay_key_id, settings.razorpay_key_secret),
         )
         self._secret = settings.razorpay_key_secret.encode()
         self._webhook_secret = settings.razorpay_webhook_secret.encode()
@@ -86,7 +122,12 @@ class RazorpayProvider(PaymentProvider):
         if expires_at is not None:
             body["expire_by"] = int(expires_at.timestamp())
         try:
-            link = self._client.payment_link.create(body)
+            # Blocking network I/O (the SDK wraps `requests`) moved off the
+            # event loop — this runs on every online checkout, so without
+            # `to_thread` it would stall every other concurrent request this
+            # worker is serving for as long as Razorpay takes to answer
+            # (AAD-PAY-008).
+            link = await asyncio.to_thread(self._client.payment_link.create, body)
         except Exception as exc:
             log.exception("razorpay payment link creation failed", extra={"receipt": receipt})
             raise UpstreamError("Could not start the payment. Try again.") from exc
@@ -200,7 +241,11 @@ class RazorpayProvider(PaymentProvider):
         here is the link id stored on the order's payment row.
         """
         try:
-            link = self._client.payment_link.fetch(provider_order_id)
+            # Same defect class as create_order below (AAD-PAY-008): this is
+            # the reconciliation backstop called before an abandoned
+            # checkout's hold is treated as truly dead, so it still runs on
+            # a real request path and must not block the loop either.
+            link = await asyncio.to_thread(self._client.payment_link.fetch, provider_order_id)
         except Exception as exc:
             log.exception(
                 "razorpay payment link status poll failed",
@@ -231,8 +276,11 @@ class RazorpayProvider(PaymentProvider):
         self, *, provider_payment_id: str, amount_paise: int, notes: dict[str, str]
     ) -> str:
         try:
-            refund = self._client.payment.refund(
-                provider_payment_id, {"amount": amount_paise, "notes": notes}
+            # Same defect class as create_order above (AAD-PAY-008).
+            refund = await asyncio.to_thread(
+                self._client.payment.refund,
+                provider_payment_id,
+                {"amount": amount_paise, "notes": notes},
             )
         except Exception as exc:
             log.exception("razorpay refund failed", extra={"payment_id": provider_payment_id})
