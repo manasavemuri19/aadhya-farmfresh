@@ -10,10 +10,10 @@ from urllib.parse import urlencode
 from app.api.deps import CurrentUser, get_order_repo, get_order_service
 from app.api.route import TransactionalRoute
 from app.core.config import settings
-from app.core.errors import NotFound, PaymentFailed
+from app.core.errors import NotFound, PaymentFailed, UpstreamError, ValidationError
 from app.payments import PaymentProvider, get_payment_provider
 from app.repositories.orders import OrderRepository
-from app.schemas.order import OrderView, VerifyPaymentRequest
+from app.schemas.order import OrderView
 from app.services.order_service import OrderService
 
 log = logging.getLogger(__name__)
@@ -23,26 +23,16 @@ Orders = Annotated[OrderService, Depends(get_order_service)]
 OrderRepo = Annotated[OrderRepository, Depends(get_order_repo)]
 Payments = Annotated[PaymentProvider, Depends(get_payment_provider)]
 
-
-@router.post("/verify", response_model=OrderView)
-async def verify_payment(
-    body: VerifyPaymentRequest, principal: CurrentUser, svc: Orders, payments: Payments
-) -> OrderView:
-    """Client-side confirmation after the gateway sheet closes.
-
-    This exists so the app can show a success screen without waiting on the
-    webhook. It verifies the signature but does not itself confirm the order —
-    the webhook does that. If the webhook is slow, the client simply polls.
-    """
-    ok = payments.verify_checkout_signature(
-        provider_order_id=body.provider_order_id,
-        provider_payment_id=body.provider_payment_id,
-        signature=body.signature,
-    )
-    if not ok:
-        log.warning("checkout signature rejected", extra={"order": body.order_id})
-        raise PaymentFailed("We could not verify that payment.")
-    return await svc.get_for_user(body.order_id, principal.user_id)
+# AAD-PAY-011: `/payments/verify` and `verify_checkout_signature` used to
+# live here. They implemented Razorpay's *Standard Checkout* signature
+# formula (`HMAC(secret, "order_id|payment_id")`) against a Payment Links
+# integration, whose actual callback signature is the differently-shaped,
+# already-correct `verify_payment_link_callback` below — so every real
+# request to this route rejected with a false "checkout signature rejected"
+# warning. It had no role once Payment Links became the integration (the
+# mobile app never called it — see `checkout.tsx`), and `/link-callback`
+# already does this job with the right formula, so it was deleted rather
+# than fixed. If Standard Checkout is ever adopted, bring it back then.
 
 
 @router.post("/webhook", status_code=status.HTTP_204_NO_CONTENT)
@@ -53,6 +43,7 @@ async def webhook(
     payments: Payments,
     x_razorpay_signature: Annotated[str | None, Header()] = None,
     x_mock_signature: Annotated[str | None, Header()] = None,
+    x_razorpay_event_id: Annotated[str | None, Header()] = None,
 ) -> Response:
     """Gateway callback — the authoritative record of payment.
 
@@ -65,7 +56,12 @@ async def webhook(
     signature = x_razorpay_signature or x_mock_signature or ""
 
     try:
-        event = payments.parse_webhook(body=raw, signature=signature)
+        # AAD-PAY-009: Razorpay's own event id arrives in this header, not
+        # anywhere in the body — read here and handed to parse_webhook so
+        # the replay guard keys on the gateway's own id.
+        event = payments.parse_webhook(
+            body=raw, signature=signature, event_id=x_razorpay_event_id
+        )
     except PaymentFailed:
         # Signature failure is the one case worth a 4xx: it is either an attack
         # or a misconfigured secret, and both need to be visible.
@@ -145,6 +141,20 @@ async def mock_complete_payment(
     return await svc.get_for_user(order_id, principal.user_id)
 
 
+# AAD-SEC-023: the five parameters Razorpay's Payment Links redirect
+# actually sends — see verify_payment_link_callback's signature and
+# link_redirect below. Anything else arriving on this unauthenticated route
+# is dropped rather than forwarded into the app's deep link.
+_REDIRECT_PARAMS = (
+    "razorpay_payment_id",
+    "razorpay_payment_link_id",
+    "razorpay_payment_link_reference_id",
+    "razorpay_payment_link_status",
+    "razorpay_signature",
+)
+_REDIRECT_PARAM_MAX_LEN = 200  # generous for a signature/id/status; not unbounded
+
+
 @router.get("/link-redirect", include_in_schema=False)
 async def link_redirect(request: Request) -> RedirectResponse:
     """The actual `callback_url` given to Razorpay's Payment Links API.
@@ -154,12 +164,32 @@ async def link_redirect(request: Request) -> RedirectResponse:
     the live API ("callback_url: URL should be sent in callback_url
     field"), not assumed. So Razorpay redirects the phone's browser here
     first, and this single hop does nothing except immediately bounce it
-    into the app's real destination, `aadhya://payment-callback`, carrying
-    every query parameter Razorpay attached forward unchanged. The app
+    into the app's real destination, `aadhya://payment-callback`. The app
     itself never talks to this route directly — it only ever sees the
     `aadhya://` redirect this produces.
+
+    AAD-SEC-023: this used to forward **every** query parameter unchanged —
+    unauthenticated, unthrottled, on this app's own production domain, into
+    a fixed-scheme deep link. Not a classic open redirect (the target
+    scheme and path are fixed), but a reflector that could launch the app's
+    payment-callback screen with attacker-chosen parameters from a URL that
+    looks entirely legitimate because the domain is real. Forged
+    confirmations still fail the HMAC check downstream (`AAD-PAY-007`), so
+    money was never actually at risk — this closes the reflector itself:
+    only the five parameters Razorpay documents are ever forwarded, each
+    length-capped, and a request missing the signature outright is rejected
+    here rather than handed to the app to sort out.
     """
-    query = urlencode(dict(request.query_params))
+    params = request.query_params
+    if not params.get("razorpay_signature"):
+        raise ValidationError("This payment redirect is missing its signature.")
+
+    forwarded = {
+        key: value
+        for key, value in params.items()
+        if key in _REDIRECT_PARAMS and len(value) <= _REDIRECT_PARAM_MAX_LEN
+    }
+    query = urlencode(forwarded)
     return RedirectResponse(url=f"aadhya://payment-callback?{query}", status_code=302)
 
 
@@ -226,19 +256,30 @@ async def payment_link_callback(
     # backstop) is what actually fails or cancels it, so this route never
     # takes a state-changing action on anything but a genuine payment.
     if razorpay_payment_link_status == "paid":
-        from app.payments.base import WebhookEvent
-
-        event = WebhookEvent(
-            event_id=f"linkcb_{razorpay_payment_id}",
-            event_type="payment_link.paid",
-            provider_order_id=razorpay_payment_link_id,
-            provider_payment_id=razorpay_payment_id,
-            amount_paise=None,  # apply_webhook's amount check only runs when present
-            raw={"source": "link_callback", "status": razorpay_payment_link_status},
-            order_id=order_id,
-        )
-        first_time = await orders.record_webhook_once(payments.name, event.event_id, event.raw)
-        if first_time:
-            await svc.apply_webhook(event)
+        # AAD-PAY-010: this used to build a WebhookEvent by hand with
+        # amount_paise=None — apply_webhook's amount-mismatch check only
+        # runs when an amount is present, so that silently switched off the
+        # one control standing between an underpaid Payment Link (partial
+        # payment is not explicitly disabled at link creation, AAD-PAY-014)
+        # and this route confirming it anyway. `poll_status` makes a real
+        # fetch of the link from Razorpay and returns the amount it
+        # actually reports paid, reusing the exact mechanism the
+        # poll-and-reconcile sweep already relies on for the same reason.
+        try:
+            event = await payments.poll_status(provider_order_id=razorpay_payment_link_id)
+        except UpstreamError:
+            # Never fatal here: this route is UX only (see the docstring
+            # above) — the webhook, or the next sweep, confirms the order
+            # regardless of whether this one live-fetch succeeds.
+            log.warning(
+                "link-callback could not reach the gateway to confirm the amount; "
+                "the webhook will confirm this order instead",
+                extra={"order": order_id},
+            )
+            event = None
+        if event is not None:
+            first_time = await orders.record_webhook_once(payments.name, event.event_id, event.raw)
+            if first_time:
+                await svc.apply_webhook(event)
 
     return {"order_id": order_id, "status": razorpay_payment_link_status}

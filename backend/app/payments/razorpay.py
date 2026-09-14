@@ -2,13 +2,20 @@
 
 Two signature schemes are involved and they are not the same thing:
 
-  * the *checkout* signature is HMAC over "order_id|payment_id" using the API
-    secret, returned by the client SDK when the sheet closes;
+  * the *Payment Link callback* signature is HMAC over the four-field
+    `payment_link_id|reference_id|status|payment_id`, verified in
+    `verify_payment_link_callback` below;
   * the *webhook* signature is HMAC over the raw request body using a separate
     webhook secret configured in the Razorpay dashboard.
 
-Both are verified with `hmac.compare_digest`. The webhook is authoritative for
-money; the checkout signature only lets the app show a success screen sooner.
+(A third, *Standard Checkout* formula — HMAC over "order_id|payment_id" —
+used to live here too, backing `/payments/verify`. It was deleted in
+AAD-PAY-011: this integration uses Payment Links, not Standard Checkout, so
+that formula never matched anything a real client sent.)
+
+Both remaining schemes are verified with `hmac.compare_digest`. The webhook is
+authoritative for money; the callback signature only lets the app show a
+success screen sooner.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from typing import Any
 
 import razorpay
 import requests
+from razorpay.errors import BadRequestError
 
 from app.core.config import settings
 from app.core.errors import PaymentFailed, UpstreamError
@@ -128,7 +136,27 @@ class RazorpayProvider(PaymentProvider):
             # worker is serving for as long as Razorpay takes to answer
             # (AAD-PAY-008).
             link = await asyncio.to_thread(self._client.payment_link.create, body)
+        except BadRequestError:
+            # AAD-PAY-013: Razorpay rejected the request itself — a
+            # malformed amount, an unsupported currency, bad auth from a
+            # rotated key. This is our bug, not a transient gateway problem,
+            # and retrying the identical request will fail identically.
+            # Never wrap this as UpstreamError, which tells the caller (and,
+            # through PaymentFailed-style handling upstream, potentially the
+            # customer) "try again" — that's the wrong instinct for a defect
+            # that only a code or config change can fix. Let it propagate as
+            # the internal error it is, loud in the logs, not disguised as
+            # gateway flakiness.
+            log.exception(
+                "razorpay rejected the payment link request — check the "
+                "request shape or credentials, this will not self-resolve",
+                extra={"receipt": receipt},
+            )
+            raise
         except Exception as exc:
+            # Genuinely transient/upstream: GatewayError, ServerError, a
+            # network timeout, or anything else the SDK didn't classify.
+            # Worth telling the caller to retry.
             log.exception("razorpay payment link creation failed", extra={"receipt": receipt})
             raise UpstreamError("Could not start the payment. Try again.") from exc
 
@@ -165,14 +193,9 @@ class RazorpayProvider(PaymentProvider):
         expected = hmac.new(self._secret, message, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
 
-    def verify_checkout_signature(
-        self, *, provider_order_id: str, provider_payment_id: str, signature: str
-    ) -> bool:
-        message = f"{provider_order_id}|{provider_payment_id}".encode()
-        expected = hmac.new(self._secret, message, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, signature)
-
-    def parse_webhook(self, *, body: bytes, signature: str) -> WebhookEvent:
+    def parse_webhook(
+        self, *, body: bytes, signature: str, event_id: str | None = None
+    ) -> WebhookEvent:
         expected = hmac.new(self._webhook_secret, body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
             log.warning("razorpay webhook signature mismatch")
@@ -224,9 +247,17 @@ class RazorpayProvider(PaymentProvider):
             amount_paise = order_entity.get("amount")
 
         return WebhookEvent(
-            # Razorpay sends this header-derived id; fall back to a body hash so
-            # the replay guard still has a stable key.
-            event_id=payload.get("id") or hashlib.sha256(body).hexdigest(),
+            # AAD-PAY-009: Razorpay sends the event id in the
+            # `x-razorpay-event-id` request header, not in the body — there
+            # is no top-level "id" in the webhook JSON, so `payload.get("id")`
+            # was always None and this always fell back to a body hash (a
+            # *content* key, not an *event* key: two distinct events that
+            # happen to serialise identically would collapse into one, and a
+            # stored row couldn't be correlated with the delivery attempt in
+            # Razorpay's own dashboard). `event_id` is that header, read and
+            # passed in by the route. The body hash is now only a fallback
+            # for a caller that genuinely didn't have the header available.
+            event_id=event_id or hashlib.sha256(body).hexdigest(),
             event_type=event_type,
             provider_order_id=provider_order_id,
             provider_payment_id=provider_payment_id,
@@ -282,6 +313,23 @@ class RazorpayProvider(PaymentProvider):
                 provider_payment_id,
                 {"amount": amount_paise, "notes": notes},
             )
+        except BadRequestError:
+            # AAD-PAY-013: same distinction as create_order above — a
+            # malformed amount (e.g. more than remains refundable) or bad
+            # auth is our bug, not the gateway being unreachable. Both
+            # callers of this method (the refund_pending / amount_mismatch
+            # sweeps) currently catch broadly and retry next sweep either
+            # way, so this doesn't yet change outcome — only the log — but
+            # it means the two failure modes are distinguishable here
+            # rather than indistinguishable, which is what a fix beyond
+            # this one (routing a permanently-bad refund to a dead letter
+            # instead of retrying it forever) would need to build on.
+            log.exception(
+                "razorpay rejected the refund request — check the amount or "
+                "credentials, this will not self-resolve on retry",
+                extra={"payment_id": provider_payment_id},
+            )
+            raise
         except Exception as exc:
             log.exception("razorpay refund failed", extra={"payment_id": provider_payment_id})
             raise UpstreamError("Refund could not be processed.") from exc

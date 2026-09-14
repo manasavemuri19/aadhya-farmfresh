@@ -53,28 +53,30 @@ class MockPaymentProvider(PaymentProvider):
                 "amount": amount_paise,
                 "currency": currency,
                 "receipt": receipt,
-                # The client "pays" by echoing this back to the verify endpoint.
-                "dev_hint": "POST /v1/payments/verify with any payment id and "
-                            "the signature from /v1/payments/mock/sign",
+                # AAD-PAY-011: /payments/verify (and the signature format
+                # this hint used to reference) is gone — the mock provider's
+                # real completion path is /payments/mock/complete, which
+                # runs the exact apply_webhook path a real webhook would.
+                "dev_hint": "POST /v1/payments/mock/complete with the order id "
+                            "to simulate the gateway confirming payment",
             },
         )
-
-    def verify_checkout_signature(
-        self, *, provider_order_id: str, provider_payment_id: str, signature: str
-    ) -> bool:
-        expected = _sign(f"{provider_order_id}|{provider_payment_id}")
-        return hmac.compare_digest(expected, signature)
 
     def sign_for_testing(self, provider_order_id: str, provider_payment_id: str) -> str:
         return _sign(f"{provider_order_id}|{provider_payment_id}")
 
-    def parse_webhook(self, *, body: bytes, signature: str) -> WebhookEvent:
+    def parse_webhook(
+        self, *, body: bytes, signature: str, event_id: str | None = None
+    ) -> WebhookEvent:
         expected = hmac.new(_DEV_SECRET, body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
             raise PaymentFailed("Webhook signature verification failed.")
         payload: dict[str, Any] = json.loads(body)
+        # The mock provider has no real delivery header to read (AAD-PAY-009
+        # is a Razorpay-specific defect) — accepted for interface parity
+        # only, and only used if a caller happens to pass one.
         return WebhookEvent(
-            event_id=payload.get("event_id", new_id("evt", 12)),
+            event_id=event_id or payload.get("event_id", new_id("evt", 12)),
             event_type=payload.get("event", "payment.captured"),
             provider_order_id=payload.get("order_id"),
             provider_payment_id=payload.get("payment_id"),

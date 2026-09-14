@@ -251,6 +251,88 @@ async def test_replaying_the_same_webhook_event_is_still_204_and_a_no_op(asgi_cl
     assert payment_status == PaymentStatus.CAPTURED.value
 
 
+async def _webhook_event_rows(seeded) -> list[str]:
+    """Reads the replay-guard table directly, independent of the ASGI
+    request's own transaction — proves what `record_webhook_once` actually
+    keyed each row on, rather than inferring it from order state."""
+    from sqlalchemy import select
+
+    from app.db.models import WebhookEvent as WebhookEventRow
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=None)
+    factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(WebhookEventRow.event_id).where(WebhookEventRow.provider == "razorpay")
+            )
+        ).scalars().all()
+    await engine.dispose()
+    return list(rows)
+
+
+async def test_webhook_uses_the_event_id_header_not_a_body_hash_for_replay_dedup(
+    asgi_client, seeded
+):
+    """AAD-PAY-009: before the fix, the replay guard keyed on a hash of the
+    body. Two *distinct* gateway deliveries that happen to carry identical
+    bodies (Razorpay's own retries of two different events, or two events
+    whose payload is genuinely the same) would then collapse into one. The
+    fix reads Razorpay's own `x-razorpay-event-id` header and keys on that
+    instead — so the same body with two different event ids must record as
+    two separate rows, not one."""
+    body, signature = _webhook_body(_paid_webhook_payload(seeded))
+    headers_common = {"content-type": "application/json", "x-razorpay-signature": signature}
+
+    first = await asgi_client.post(
+        "/v1/payments/webhook", content=body,
+        headers={**headers_common, "x-razorpay-event-id": "evt_aad_pay_009_a"},
+    )
+    second = await asgi_client.post(
+        "/v1/payments/webhook", content=body,
+        headers={**headers_common, "x-razorpay-event-id": "evt_aad_pay_009_b"},
+    )
+
+    assert first.status_code == 204, first.text
+    assert second.status_code == 204, second.text
+    event_ids = await _webhook_event_rows(seeded)
+    assert sorted(event_ids) == ["evt_aad_pay_009_a", "evt_aad_pay_009_b"]
+
+
+async def test_webhook_treats_the_same_event_id_header_as_a_duplicate_regardless_of_body(
+    asgi_client, seeded
+):
+    """The other direction: two *different* bodies delivered under the same
+    `x-razorpay-event-id` (a gateway retry that re-signs, or a delivery
+    Razorpay itself considers one logical event) must still dedup as one
+    row, keyed on the header — not fall through to the old body-hash
+    fallback just because the bytes differ."""
+    body_a, sig_a = _webhook_body(_paid_webhook_payload(seeded, payment_id="pay_aad_pay_009_x"))
+    body_b, sig_b = _webhook_body(_paid_webhook_payload(seeded, payment_id="pay_aad_pay_009_y"))
+
+    first = await asgi_client.post(
+        "/v1/payments/webhook", content=body_a,
+        headers={
+            "content-type": "application/json",
+            "x-razorpay-signature": sig_a,
+            "x-razorpay-event-id": "evt_aad_pay_009_dup",
+        },
+    )
+    second = await asgi_client.post(
+        "/v1/payments/webhook", content=body_b,
+        headers={
+            "content-type": "application/json",
+            "x-razorpay-signature": sig_b,
+            "x-razorpay-event-id": "evt_aad_pay_009_dup",
+        },
+    )
+
+    assert first.status_code == 204, first.text
+    assert second.status_code == 204, second.text
+    event_ids = await _webhook_event_rows(seeded)
+    assert event_ids == ["evt_aad_pay_009_dup"]
+
+
 async def test_webhook_with_a_bad_signature_is_rejected_and_does_not_confirm(asgi_client, seeded):
     body, _ = _webhook_body(_paid_webhook_payload(seeded))
 
@@ -267,13 +349,114 @@ async def test_webhook_with_a_bad_signature_is_rejected_and_does_not_confirm(asg
 
 
 # ---------------------------------------------------------------------------
+# GET /v1/payments/link-redirect
+# ---------------------------------------------------------------------------
+
+
+async def test_link_redirect_forwards_only_the_documented_params(asgi_client):
+    """AAD-SEC-023: before the fix, every query parameter on this
+    unauthenticated, production-domain route was forwarded unchanged into
+    the app's `aadhya://` deep link. This proves only the five parameters
+    Razorpay actually sends survive, and an attacker-chosen extra param
+    (here, `redirect_to`, shaped like something a phishing attempt might
+    add) is dropped rather than reaching the app."""
+    from urllib.parse import parse_qs, urlparse
+
+    resp = await asgi_client.get(
+        "/v1/payments/link-redirect",
+        params={
+            "razorpay_payment_id": "pay_sec023",
+            "razorpay_payment_link_id": "plink_sec023",
+            "razorpay_payment_link_reference_id": "ord_sec023",
+            "razorpay_payment_link_status": "paid",
+            "razorpay_signature": "deadbeef",
+            "redirect_to": "https://not-razorpay.example/steal",
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302, resp.text
+    location = resp.headers["location"]
+    assert location.startswith("aadhya://payment-callback?")
+    forwarded = parse_qs(urlparse(location).query)
+    assert set(forwarded) == {
+        "razorpay_payment_id",
+        "razorpay_payment_link_id",
+        "razorpay_payment_link_reference_id",
+        "razorpay_payment_link_status",
+        "razorpay_signature",
+    }
+    assert forwarded["razorpay_signature"] == ["deadbeef"]
+
+
+async def test_link_redirect_without_a_signature_is_rejected(asgi_client):
+    resp = await asgi_client.get(
+        "/v1/payments/link-redirect",
+        params={"razorpay_payment_link_status": "paid"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 422, resp.text
+
+
+async def test_link_redirect_drops_an_oversized_param_value(asgi_client):
+    """A length cap on top of the allowlist — even one of the five real
+    param names is dropped if its value is implausibly long."""
+    from urllib.parse import parse_qs, urlparse
+
+    resp = await asgi_client.get(
+        "/v1/payments/link-redirect",
+        params={
+            "razorpay_signature": "deadbeef",
+            "razorpay_payment_id": "x" * 201,
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302, resp.text
+    forwarded = parse_qs(urlparse(resp.headers["location"]).query)
+    assert "razorpay_payment_id" not in forwarded
+    assert forwarded["razorpay_signature"] == ["deadbeef"]
+
+
+# ---------------------------------------------------------------------------
 # GET /v1/payments/link-callback
 # ---------------------------------------------------------------------------
 
 
-async def test_signed_paid_callback_confirms_the_order(asgi_client, seeded):
+def _mock_link_fetch(seeded, *, amount_paid: int, status: str = "paid"):
+    """Stands in for the real `razorpay.Client.payment_link.fetch(...)` SDK
+    call `RazorpayProvider.poll_status` makes (AAD-PAY-010) — no live
+    Razorpay account exists to fetch from, so this returns exactly the
+    shape that call returns."""
+
+    def fetch(provider_order_id: str) -> dict:
+        return {
+            "id": seeded["provider_order_id"],
+            "status": status,
+            "amount_paid": amount_paid,
+            "reference_id": seeded["order_id"],
+            "payments": [{"payment_id": "pay_callback_test"}],
+        }
+
+    return fetch
+
+
+async def test_signed_paid_callback_confirms_the_order(asgi_client, seeded, monkeypatch):
+    from app.payments import get_payment_provider
+
     signature = _callback_signature(
         seeded["provider_order_id"], seeded["order_id"], "paid", "pay_callback_test",
+    )
+
+    # AAD-PAY-010: the callback route now fetches the live Payment Link from
+    # Razorpay to get the actually-captured amount, rather than skipping
+    # the amount check entirely — so this route's own confirmation now
+    # depends on that fetch, which has no live account to reach.
+    provider = get_payment_provider()
+    monkeypatch.setattr(
+        provider._client.payment_link, "fetch",
+        _mock_link_fetch(seeded, amount_paid=seeded["total_paise"]),
     )
 
     resp = await asgi_client.get(
@@ -292,6 +475,50 @@ async def test_signed_paid_callback_confirms_the_order(asgi_client, seeded):
     status_, payment_status = await _order_status(seeded)
     assert status_ == OrderStatus.CONFIRMED.value
     assert payment_status == PaymentStatus.CAPTURED.value
+
+
+async def test_signed_paid_callback_does_not_confirm_when_the_live_amount_is_short(
+    asgi_client, seeded, monkeypatch
+):
+    """AAD-PAY-010's regression case: the query string says "paid" (and is
+    correctly signed — this is not a forgery), but Razorpay's own live
+    record of the link shows less was actually captured than the order
+    costs. Before this fix, the callback built its own WebhookEvent with
+    amount_paise=None, which skips apply_webhook's amount-mismatch check
+    entirely — this proves that check is now actually wired up."""
+    from app.payments import get_payment_provider
+
+    signature = _callback_signature(
+        seeded["provider_order_id"], seeded["order_id"], "paid", "pay_callback_test",
+    )
+
+    provider = get_payment_provider()
+    monkeypatch.setattr(
+        provider._client.payment_link, "fetch",
+        _mock_link_fetch(seeded, amount_paid=seeded["total_paise"] - 100),
+    )
+
+    resp = await asgi_client.get(
+        "/v1/payments/link-callback",
+        params={
+            "razorpay_payment_id": "pay_callback_test",
+            "razorpay_payment_link_id": seeded["provider_order_id"],
+            "razorpay_payment_link_reference_id": seeded["order_id"],
+            "razorpay_payment_link_status": "paid",
+            "razorpay_signature": signature,
+        },
+    )
+
+    # Still 200 — the signature is genuinely valid, this is not a forged
+    # request, and the route's own contract doesn't change. It just must
+    # not have confirmed the order.
+    assert resp.status_code == 200, resp.text
+    status_, payment_status = await _order_status(seeded)
+    assert status_ == OrderStatus.PENDING_PAYMENT.value
+    # AAD-PAY-005: no longer left at CREATED with the money stranded — the
+    # short amount is flagged so the sweep refunds it. See
+    # tests/test_amount_mismatch.py for that behaviour in full.
+    assert payment_status == PaymentStatus.AMOUNT_MISMATCH.value
 
 
 async def test_callback_with_a_bad_signature_is_rejected_and_does_not_confirm(asgi_client, seeded):

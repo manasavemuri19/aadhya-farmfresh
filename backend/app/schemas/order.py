@@ -140,16 +140,6 @@ class UpdateOrderAddressRequest(Schema):
     address: Address
 
 
-class VerifyPaymentRequest(Schema):
-    """Posted by the client after the gateway sheet closes. Treated as a hint
-    only — the webhook is the source of truth for money."""
-
-    order_id: str
-    provider_order_id: str
-    provider_payment_id: str
-    signature: str
-
-
 class AdjustStockRequest(Schema):
     sku: str
     # Absolute set, or a relative delta — one of the two, never both.

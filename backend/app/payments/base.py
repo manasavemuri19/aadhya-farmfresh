@@ -89,18 +89,18 @@ class PaymentProvider(ABC):
         ...
 
     @abstractmethod
-    def verify_checkout_signature(
-        self, *, provider_order_id: str, provider_payment_id: str, signature: str
-    ) -> bool:
-        """Verify the payload the client hands back after the sheet closes.
+    def parse_webhook(
+        self, *, body: bytes, signature: str, event_id: str | None = None
+    ) -> WebhookEvent:
+        """Verify the signature and decode the event. Raises on a bad signature.
 
-        A pass here is a hint, not proof of payment — the webhook is the only
-        thing that moves an order to confirmed.
+        `event_id` is the gateway's own delivery id (AAD-PAY-009) — the route
+        reads it from whatever header the provider actually sends it in
+        (`X-Razorpay-Event-Id` for Razorpay) and passes it through, since a
+        provider's replay guard needs its *own* event id, not one guessed
+        from the body, to correlate a stored `webhook_events` row with the
+        delivery attempt in the gateway's own dashboard.
         """
-
-    @abstractmethod
-    def parse_webhook(self, *, body: bytes, signature: str) -> WebhookEvent:
-        """Verify the signature and decode the event. Raises on a bad signature."""
 
     @abstractmethod
     async def poll_status(self, *, provider_order_id: str) -> WebhookEvent | None:
