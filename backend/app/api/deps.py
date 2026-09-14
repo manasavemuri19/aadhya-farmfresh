@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import Forbidden, Unauthorized
+from app.core.errors import Forbidden, Unauthorized, ValidationError
 from app.core.logging import user_id_var
 from app.core.security import decode_token
 from app.db.base import get_session_factory
@@ -214,5 +214,11 @@ async def idempotency_key(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> str | None:
     if idempotency_key and (len(idempotency_key) > 128 or len(idempotency_key) < 8):
-        raise Unauthorized("Idempotency-Key must be between 8 and 128 characters.")
+        # A malformed header is not a failed authentication, and must never look
+        # like one to the client: client.ts treats any 401 on an authenticated
+        # call as an expired token, refreshes, and (per AAD-MOB-001) can clear
+        # the keychain — turning a client-side idempotency-key bug into the
+        # customer being signed out mid-checkout, with the retry doomed to
+        # send the same bad key and fail the same way forever.
+        raise ValidationError("Idempotency-Key must be between 8 and 128 characters.")
     return idempotency_key
