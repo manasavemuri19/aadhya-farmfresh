@@ -391,7 +391,7 @@ class OrderRepository:
         await self.session.flush()
         return result.rowcount == 1
 
-    async def redact_expired_webhook_payloads(self) -> int:
+    async def redact_expired_webhook_payloads(self, *, batch_size: int = 500) -> int:
         """AAD-DATA-011: clears `payload` on rows past retention; the
         `(provider, event_id)` row itself — and its replay-guard unique
         constraint — is kept forever, since it's small and it's the whole
@@ -401,11 +401,22 @@ class OrderRepository:
         The `payload != '{}'` guard means an already-redacted row is never
         rewritten on a later sweep — same idea as WHERE-guarding any other
         idempotent cleanup.
+
+        AAD-REL-003: batched like the other two sweeps — a LIMIT-bounded id
+        subquery, looped until drained — so a large backlog of past-
+        retention rows can't take one long lock across the whole table.
+        `ix_webhook_received` keeps each batch's subquery cheap.
         """
         cutoff = datetime.now(UTC) - WEBHOOK_PAYLOAD_RETENTION
-        result = await self.session.execute(
-            update(WebhookEvent)
-            .where(WebhookEvent.received_at < cutoff, WebhookEvent.payload != {})
-            .values(payload={})
-        )
-        return result.rowcount or 0
+        total = 0
+        while True:
+            batch = select(WebhookEvent.id).where(
+                WebhookEvent.received_at < cutoff, WebhookEvent.payload != {}
+            ).limit(batch_size)
+            result = await self.session.execute(
+                update(WebhookEvent).where(WebhookEvent.id.in_(batch)).values(payload={})
+            )
+            updated = result.rowcount or 0
+            total += updated
+            if updated < batch_size:
+                return total

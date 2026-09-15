@@ -75,8 +75,24 @@ class IdempotencyRepository:
             )
         )
 
-    async def delete_expired(self) -> int:
-        result = await self.session.execute(
-            delete(IdempotencyKey).where(IdempotencyKey.expires_at < datetime.now(UTC))
-        )
-        return result.rowcount or 0
+    async def delete_expired(self, *, batch_size: int = 500) -> int:
+        """AAD-REL-003: this used to be one bare, unbounded `DELETE`. After a
+        backlog builds — a sweeper that's been down, a deploy storm — that
+        single statement would try to delete everything at once, taking a
+        long lock and blocking live traffic for the duration. Deleting by a
+        LIMIT-bounded id subquery in a loop keeps every individual statement
+        small and fast, at the cost of needing several round trips instead
+        of one; `ix_idempotency_expires` makes each subquery itself cheap.
+        """
+        total = 0
+        while True:
+            batch = select(IdempotencyKey.id).where(
+                IdempotencyKey.expires_at < datetime.now(UTC)
+            ).limit(batch_size)
+            result = await self.session.execute(
+                delete(IdempotencyKey).where(IdempotencyKey.id.in_(batch))
+            )
+            deleted = result.rowcount or 0
+            total += deleted
+            if deleted < batch_size:
+                return total

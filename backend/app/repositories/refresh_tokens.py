@@ -103,13 +103,28 @@ class RefreshTokenRepository:
             .values(revoked_at=datetime.now(UTC))
         )
 
-    async def delete_expired(self) -> int:
+    async def delete_expired(self, *, batch_size: int = 500) -> int:
         """Once a row's `expires_at` has passed, the JWT it corresponds to
         already fails its own `exp` check before ever reaching this table —
         the row has no further security purpose (not even for reuse
         detection) and only exists to be pruned, same reasoning as the OTP
-        and idempotency sweeps this runs alongside."""
-        result = await self.session.execute(
-            delete(RefreshToken).where(RefreshToken.expires_at < datetime.now(UTC))
-        )
-        return result.rowcount or 0
+        and idempotency sweeps this runs alongside.
+
+        AAD-REL-003: batched the same way as `IdempotencyRepository.
+        delete_expired` — a LIMIT-bounded id (`jti`) subquery, looped until
+        drained, so a large backlog can't take one long lock across the
+        whole table. `ix_refresh_tokens_expires` keeps each batch's subquery
+        cheap.
+        """
+        total = 0
+        while True:
+            batch = select(RefreshToken.jti).where(
+                RefreshToken.expires_at < datetime.now(UTC)
+            ).limit(batch_size)
+            result = await self.session.execute(
+                delete(RefreshToken).where(RefreshToken.jti.in_(batch))
+            )
+            deleted = result.rowcount or 0
+            total += deleted
+            if deleted < batch_size:
+                return total

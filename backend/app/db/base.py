@@ -7,6 +7,7 @@ commit or roll back together.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -35,11 +36,27 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def create_engine() -> AsyncEngine:
     return create_async_engine(
         settings.async_database_url,
-        pool_size=10,
-        max_overflow=10,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_s,
         pool_pre_ping=True,       # a connection killed by the DB is replaced, not raised
         pool_recycle=1800,        # managed Postgres drops idle connections; recycle first
         echo=settings.sql_echo,
+        # AAD-PERF-002: previously unset, so one pathological query — a
+        # missing index, a lock wait — held its connection indefinitely;
+        # twenty of those and the pool is gone. asyncpg applies these as
+        # session-level `SET`s on every new physical connection, so they
+        # bound every statement/lock-wait this pool ever runs, not just the
+        # request that happened to trigger the slow query.
+        connect_args={
+            "server_settings": {
+                "statement_timeout": str(settings.db_statement_timeout_ms),
+                "lock_timeout": str(settings.db_lock_timeout_ms),
+                "idle_in_transaction_session_timeout": str(
+                    settings.db_idle_in_transaction_timeout_ms
+                ),
+            }
+        },
     )
 
 
@@ -93,9 +110,20 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 async def ping() -> bool:
     from sqlalchemy import text
 
-    try:
+    async def _check() -> None:
         async with get_session_factory()() as session:
             await session.execute(text("SELECT 1"))
+
+    try:
+        # AAD-PERF-002: a *hung* database (not a down one — a connection
+        # storm, a stuck lock) previously had no timeout here at all, so the
+        # readiness probe itself would hang rather than fail. A hanging
+        # probe is worse than a failing one: it can make the platform's own
+        # health-check timeout the deciding factor instead of this code,
+        # and it defeats the whole point of AAD-OPS-006's readiness/liveness
+        # split, since a check that never returns never reports "degraded"
+        # either.
+        await asyncio.wait_for(_check(), timeout=2.0)
         return True
     except Exception:
         log.exception("database ping failed")

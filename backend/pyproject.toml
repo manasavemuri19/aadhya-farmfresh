@@ -36,6 +36,12 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "types-requests>=2.32",
+    # AAD-OPS-005: there's no lockfile for a scanner to check without this —
+    # `pip-audit -r requirements-lock.txt` is the local equivalent of the
+    # Dependabot alerts this repo doesn't have yet (no CI pipeline exists at
+    # all — see AAD-OPS-012 — so wiring this into a scheduled CI job is
+    # future work, not something to fake here).
+    "pip-audit>=2.7",
 ]
 
 [tool.setuptools.packages.find]

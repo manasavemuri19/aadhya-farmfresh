@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/aadhya"
     sql_echo: bool = False
 
+    # AAD-PERF-002: all five were previously hardcoded in db/base.py, so
+    # tuning per environment meant editing code. Pool settings default to
+    # exactly what was hardcoded before (unchanged behaviour unless you set
+    # an env var); the three timeouts are new — none existed at all, so a
+    # single pathological query or lock wait could hold a connection (and,
+    # with enough of them, the whole pool) indefinitely.
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    db_pool_timeout_s: int = 30
+    db_statement_timeout_ms: int = 10_000
+    db_lock_timeout_ms: int = 3_000
+    db_idle_in_transaction_timeout_ms: int = 15_000
+
     # Auth
     # AAD-SEC-008: SecretStr, not str — pydantic's default __repr__ dumps
     # every field verbatim, so anything that renders the settings object (a

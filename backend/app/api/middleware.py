@@ -12,11 +12,20 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.api.v1.router import API_V1_PREFIX
 from app.core.logging import request_id_var
 
 log = logging.getLogger("app.access")
 
 REQUEST_ID_HEADER = "X-Request-Id"
+
+# AAD-OPS-004: this used to be the literal strings "/health" and
+# "/health/live" — the paths those routes have *before* being mounted.
+# `app.main` mounts them under API_V1_PREFIX, so the real, resolved paths
+# are "/v1/health" and "/v1/health/live", and the set here never matched
+# anything. Importing the same prefix constant `main.py` uses means the two
+# cannot drift apart again the way they already had.
+_UNLOGGED_PATHS = {f"{API_V1_PREFIX}/health", f"{API_V1_PREFIX}/health/live"}
 
 # AAD-SEC-006: whatever the client sends used to become the request id
 # verbatim — no length cap, no charset restriction — and was then written
@@ -43,35 +52,45 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         started = time.perf_counter()
 
+        # AAD-OPS-003: the `reset` used to sit in its own `finally` around
+        # only `call_next`, so it ran — clearing the contextvar back to the
+        # "-" default — *before* the success log line below, which is what
+        # `JsonFormatter` reads at format time. Every successful request's
+        # access-log line recorded request_id: "-"; only the exception path
+        # kept its id, because that log call sits inside its own `except`,
+        # ahead of the reset. The whole dispatch body is now inside one
+        # `try`, and the reset is the outer `finally` around all of it, so
+        # both log calls execute while the contextvar is still set.
         try:
-            response: Response = await call_next(request)
-        except Exception:
+            try:
+                response: Response = await call_next(request)
+            except Exception:
+                duration_ms = round((time.perf_counter() - started) * 1000, 2)
+                log.exception(
+                    "request failed",
+                    extra={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "duration_ms": duration_ms,
+                    },
+                )
+                raise
+
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            log.exception(
-                "request failed",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "duration_ms": duration_ms,
-                },
-            )
-            raise
+            response.headers[REQUEST_ID_HEADER] = request_id
+            if request.url.path not in _UNLOGGED_PATHS:
+                log.info(
+                    "request",
+                    extra={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status": response.status_code,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            return response
         finally:
             request_id_var.reset(token)
-
-        duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        response.headers[REQUEST_ID_HEADER] = request_id
-        if request.url.path not in {"/health", "/health/live"}:
-            log.info(
-                "request",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": response.status_code,
-                    "duration_ms": duration_ms,
-                },
-            )
-        return response
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

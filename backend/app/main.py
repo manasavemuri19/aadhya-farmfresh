@@ -16,7 +16,7 @@ from app.api.middleware import (
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
-from app.api.v1.router import api_router
+from app.api.v1.router import API_V1_PREFIX, api_router
 from app.core.config import settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
@@ -26,26 +26,35 @@ log = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SECONDS = 120
 
+# AAD-REL-003: a non-blocking, transaction-scoped advisory lock — released
+# automatically at the sweep's own commit/rollback, no manual unlock needed.
+# Every replica still runs this loop on its own timer; only the one that
+# wins the lock in a given iteration does the work, so concurrent replicas
+# no longer collide on the same expired rows. The key is an arbitrary
+# constant unique to this job (distinct from alembic/env.py's migration
+# lock key).
+_SWEEP_ADVISORY_LOCK_KEY = 88230001
 
-async def _housekeeping(app: FastAPI) -> None:
-    """Background maintenance.
 
-    Five jobs on one timer: reclaim stock held by abandoned checkouts,
+async def _run_sweep_once() -> None:
+    """One housekeeping pass — reclaim stock held by abandoned checkouts,
     process any refunds queued against the gateway (AAD-PAY-003 — cancel and
     force-refund commit the order state change immediately but never call
-    Razorpay inline, so this is where that call actually happens; AAD-PAY-005's
-    amount-mismatch refunds are the same deferred-gateway-call shape), delete
-    expired idempotency keys and refresh-token rows (AAD-SEC-002 — once a
-    row's `expires_at` has passed it has no further purpose, not even for
-    reuse detection), and redact webhook payloads past retention
-    (AAD-DATA-011 — the `(provider, event_id)` dedupe row stays forever, only
-    the raw gateway payload is cleared). Postgres has no TTL index, so that
-    cleanup is explicit rather than automatic.
+    Razorpay inline, so this is where that call actually happens;
+    AAD-PAY-005's amount-mismatch refunds are the same deferred-gateway-call
+    shape), delete expired idempotency keys and refresh-token rows
+    (AAD-SEC-002 — once a row's `expires_at` has passed it has no further
+    purpose, not even for reuse detection), and redact webhook payloads past
+    retention (AAD-DATA-011 — the `(provider, event_id)` dedupe row stays
+    forever, only the raw gateway payload is cleared). Postgres has no TTL
+    index, so that cleanup is explicit rather than automatic.
 
-    A single in-process loop is right for one or two instances. If this ever
-    runs on many replicas, move it behind an advisory lock or a scheduled job
-    so the work is not duplicated.
+    Split out from the loop in `_housekeeping` below so it can run
+    immediately at startup as well as on the timer, and so a test can call
+    it directly without needing to run (or cancel) an infinite loop.
     """
+    from sqlalchemy import text
+
     from app.db.base import session_scope
     from app.payments import get_payment_provider
     from app.repositories.idempotency import IdempotencyRepository
@@ -55,27 +64,70 @@ async def _housekeeping(app: FastAPI) -> None:
     from app.repositories.support import SupportRepository
     from app.services.order_service import OrderService
 
+    async with session_scope() as session:
+        got_lock = (
+            await session.execute(
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
+                {"key": _SWEEP_ADVISORY_LOCK_KEY},
+            )
+        ).scalar_one()
+        if not got_lock:
+            log.info("housekeeping sweep skipped: another replica holds the lock")
+            return
+
+        service = OrderService(
+            ProductRepository(session),
+            OrderRepository(session),
+            IdempotencyRepository(session),
+            get_payment_provider(),
+            support=SupportRepository(session),
+        )
+        released = await service.release_expired_holds()
+        refunded = await service.process_pending_refunds()
+        mismatched = await service.process_amount_mismatches()
+        keys_deleted = await IdempotencyRepository(session).delete_expired()
+        tokens_deleted = await RefreshTokenRepository(session).delete_expired()
+        payloads_redacted = await service.orders.redact_expired_webhook_payloads()
+
+    # AAD-REL-003: there's no metrics system anywhere in this codebase to
+    # emit an actual gauge to (confirmed — no prometheus_client or
+    # equivalent in pyproject.toml), so this structured line is the
+    # equivalent that fits how this app is actually observed: a log-based
+    # alert on "no 'housekeeping sweep completed' line in N minutes" gives
+    # you the same "has this gone stale" signal the finding asks for,
+    # without adding a metrics dependency this batch didn't otherwise need.
+    log.info(
+        "housekeeping sweep completed",
+        extra={
+            "holds_released": released,
+            "refunds_processed": refunded,
+            "mismatches_processed": mismatched,
+            "idempotency_keys_deleted": keys_deleted,
+            "refresh_tokens_deleted": tokens_deleted,
+            "webhook_payloads_redacted": payloads_redacted,
+        },
+    )
+
+
+async def _housekeeping(app: FastAPI) -> None:
+    """Runs `_run_sweep_once` on a timer for the life of the process.
+
+    AAD-REL-003: this used to `await asyncio.sleep(SWEEP_INTERVAL_SECONDS)`
+    *before* the first sweep, so nothing was swept until 2 minutes after
+    boot — and the timer reset on every deploy and restart, so deploying
+    more often than that during an incident meant expired stock holds were
+    never released at all. The first pass now runs immediately; the sleep
+    moves to the end of the loop, after the work, so it only ever delays the
+    *next* sweep, never the first one.
+    """
     while True:
-        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
         try:
-            async with session_scope() as session:
-                service = OrderService(
-                    ProductRepository(session),
-                    OrderRepository(session),
-                    IdempotencyRepository(session),
-                    get_payment_provider(),
-                    support=SupportRepository(session),
-                )
-                await service.release_expired_holds()
-                await service.process_pending_refunds()
-                await service.process_amount_mismatches()
-                await IdempotencyRepository(session).delete_expired()
-                await RefreshTokenRepository(session).delete_expired()
-                await service.orders.redact_expired_webhook_payloads()
+            await _run_sweep_once()
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("housekeeping iteration failed")
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
@@ -165,7 +217,7 @@ async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-app.include_router(api_router, prefix="/v1")
+app.include_router(api_router, prefix=API_V1_PREFIX)
 
 
 @app.get("/", include_in_schema=False)
