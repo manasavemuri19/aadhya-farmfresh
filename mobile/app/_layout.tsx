@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { Fraunces_600SemiBold, Fraunces_700Bold } from '@expo-google-fonts/fraunces';
@@ -16,7 +17,27 @@ import { LoginScreen } from '../src/screens/LoginScreen';
 import { CompleteProfileScreen } from '../src/screens/CompleteProfileScreen';
 import { registerForPushNotifications } from '../src/lib/pushNotifications';
 
+// AAD-MOB-013: catches a render error anywhere in this app — including one
+// thrown by RootLayout itself (isProfileComplete below, or the font/session
+// gating render) — so the failure mode is a retry screen, not a permanent
+// blank one. Per-screen ErrorBoundary exports on order/[id] and payment
+// narrow the blast radius further for the two riskiest screens; this one is
+// the backstop for everything else.
+export { AppErrorFallback as ErrorBoundary } from '../src/components/ErrorBoundary';
+
 void SplashScreen.preventAutoHideAsync();
+
+// AAD-MOB-011: React Query only pauses refetchInterval on backgrounding when
+// focusManager is told what "focused" means for this platform — on the web
+// it infers this from document.visibilitychange automatically, but React
+// Native has no such default, so without this every poll (order tracking,
+// payment status, the delivery agent's ongoing/requests lists) keeps firing
+// at full frequency indefinitely while the app sits backgrounded. One
+// listener here fixes every refetchInterval call site in the app at once —
+// none of them need to know this exists.
+function onAppStateChange(status: AppStateStatus): void {
+  focusManager.setFocused(status === 'active');
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +66,11 @@ export default function RootLayout() {
     DMSans_400Regular, DMSans_500Medium, DMSans_700Bold,
     DMMono_400Regular, DMMono_500Medium,
   });
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', onAppStateChange);
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => { void restore(); }, [restore]);
   useEffect(() => {

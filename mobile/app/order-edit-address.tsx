@@ -26,7 +26,14 @@ export default function OrderEditAddressScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const location = useLocationStore();
+  // AAD-MOB-017: individual selectors rather than the whole store — see
+  // checkout.tsx for the same fix and why.
+  const locationStatus = useLocationStore((s) => s.status);
+  const locationLine1 = useLocationStore((s) => s.line1);
+  const locationPincode = useLocationStore((s) => s.pincode);
+  const locationLatitude = useLocationStore((s) => s.latitude);
+  const locationLongitude = useLocationStore((s) => s.longitude);
+  const requestLocation = useLocationStore((s) => s.request);
 
   const order = useQuery({
     queryKey: ['order', orderId],
@@ -37,10 +44,12 @@ export default function OrderEditAddressScreen() {
   const [landmark, setLandmark] = useState('');
   const [pincode, setPincode] = useState('');
   const [prefilled, setPrefilled] = useState(false);
-  // Only replaced when the person edits the address text or taps "use my
-  // current location" — otherwise the order's existing coordinates (if any)
-  // travel through unchanged.
+  // Only replaced when the person edits the pincode to a genuinely
+  // different one, or taps "use my current location" — otherwise the
+  // order's existing coordinates (if any) travel through unchanged, even
+  // while the address text itself is being corrected (AAD-MOB-016).
   const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [coordsPincode, setCoordsPincode] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible] = useState(false);
 
   useEffect(() => {
@@ -50,27 +59,39 @@ export default function OrderEditAddressScreen() {
     setPincode(order.data.address.pincode);
     if (order.data.address.latitude != null && order.data.address.longitude != null) {
       setCoords({ latitude: order.data.address.latitude, longitude: order.data.address.longitude });
+      setCoordsPincode(order.data.address.pincode ?? null);
     }
     setPrefilled(true);
   }, [order.data, prefilled]);
 
   const useCurrentLocation = () => {
-    if (location.status === 'found' && location.line1) {
-      setLine1(location.line1);
-      if (location.pincode) setPincode(location.pincode);
-      if (location.latitude != null && location.longitude != null) {
-        setCoords({ latitude: location.latitude, longitude: location.longitude });
+    if (locationStatus === 'found' && locationLine1) {
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
     } else {
-      void location.request();
+      void requestLocation();
     }
   };
 
   const applyPickedLocation = (picked: PickedLocation) => {
     setCoords({ latitude: picked.latitude, longitude: picked.longitude });
+    setCoordsPincode(picked.pincode ?? null);
     if (picked.line1) setLine1(picked.line1);
     if (picked.pincode) setPincode(picked.pincode);
     setPickerVisible(false);
+  };
+
+  const updatePincode = (t: string) => {
+    setPincode(t);
+    const trimmed = t.trim();
+    if (coords && coordsPincode && /^\d{6}$/.test(trimmed) && trimmed !== coordsPincode) {
+      setCoords(null);
+      setCoordsPincode(null);
+    }
   };
 
   const save = useMutation({
@@ -132,7 +153,7 @@ export default function OrderEditAddressScreen() {
           style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
         >
           <Text style={styles.locationButtonText}>
-            {location.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+            {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
         <Pressable
@@ -146,7 +167,7 @@ export default function OrderEditAddressScreen() {
         <Field
           label="Flat, building and street"
           value={line1}
-          onChangeText={(t) => { setLine1(t); setCoords(null); }}
+          onChangeText={setLine1}
           placeholder="12-3-45, Rose Villa, Banjara Hills"
           autoComplete="street-address"
         />
@@ -159,7 +180,7 @@ export default function OrderEditAddressScreen() {
         <Field
           label="Pincode"
           value={pincode}
-          onChangeText={(t) => { setPincode(t); setCoords(null); }}
+          onChangeText={updatePincode}
           placeholder="500034"
           keyboardType="number-pad"
           maxLength={6}

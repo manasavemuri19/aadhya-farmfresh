@@ -9,6 +9,10 @@ import { Loading, ErrorState } from '../src/components/Feedback';
 import { ordersApi, paymentsApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
+// AAD-MOB-013: this screen reads an untyped `checkout_payload?.short_url`
+// straight from the server dict — a per-route boundary contains a bad
+// render here to this screen rather than the whole stack.
+export { AppErrorFallback as ErrorBoundary } from '../src/components/ErrorBoundary';
 
 /**
  * Two real paths, chosen by `order.payment.provider`:
@@ -74,19 +78,28 @@ export default function PaymentScreen() {
     }
   }, [isRealProvider, shortUrl]);
 
+  // AAD-MOB-015: there is nothing left for this screen to show once the
+  // order is confirmed, or once it was never actually payable here (COD,
+  // or any status other than pending_payment) — navigate away instead. This
+  // used to run as a side effect of *render itself*, which on a screen that
+  // polls every 4 seconds meant `router.replace` fired again on every poll
+  // after confirmation until the navigation committed. A `useEffect` keyed
+  // on the actual condition fires it once per transition instead.
+  const shouldLeaveForOrderScreen =
+    !!order.data &&
+    !(order.data.payment.method === 'online' && order.data.status === 'pending_payment');
+
+  useEffect(() => {
+    if (shouldLeaveForOrderScreen) {
+      router.replace(`/order/${orderId}`);
+    }
+  }, [shouldLeaveForOrderScreen, orderId, router]);
+
   if (order.isPending) return <Loading label="Preparing payment" />;
   if (order.isError || !order.data) {
     return <ErrorState message="Could not load this order." onRetry={() => void order.refetch()} />;
   }
-
-  if (order.data.status === 'confirmed') {
-    router.replace(`/order/${orderId}`);
-    return null;
-  }
-  if (order.data.payment.method !== 'online' || order.data.status !== 'pending_payment') {
-    router.replace(`/order/${orderId}`);
-    return null;
-  }
+  if (shouldLeaveForOrderScreen) return <Loading label="Redirecting" />;
 
   return (
     <View style={styles.screen}>

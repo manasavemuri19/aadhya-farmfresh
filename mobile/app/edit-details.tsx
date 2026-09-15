@@ -18,7 +18,14 @@ import type { Address } from '../src/api/types';
  */
 export default function EditDetailsScreen() {
   const { user, setUser } = useSession();
-  const deviceLocation = useLocationStore();
+  // AAD-MOB-017: individual selectors rather than the whole store — see
+  // checkout.tsx for the same fix and why.
+  const locationStatus = useLocationStore((s) => s.status);
+  const locationLine1 = useLocationStore((s) => s.line1);
+  const locationPincode = useLocationStore((s) => s.pincode);
+  const locationLatitude = useLocationStore((s) => s.latitude);
+  const locationLongitude = useLocationStore((s) => s.longitude);
+  const requestLocation = useLocationStore((s) => s.request);
 
   const existing = user?.addresses?.[0];
   const [name, setName] = useState(user?.name ?? '');
@@ -35,45 +42,65 @@ export default function EditDetailsScreen() {
       ? { latitude: existing.latitude, longitude: existing.longitude }
       : null,
   );
+  // Only replaced when the person edits the pincode to a genuinely
+  // different one, or taps "use my current location" — otherwise the
+  // saved address's existing coordinates travel through unchanged, even
+  // while the address text itself is being corrected (AAD-MOB-016).
+  const [coordsPincode, setCoordsPincode] = useState<string | null>(
+    existing?.latitude != null && existing?.longitude != null ? (existing?.pincode ?? null) : null,
+  );
   const [saved, setSaved] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
 
   const useCurrentLocation = () => {
-    if (deviceLocation.status === 'found' && deviceLocation.line1) {
-      setLine1(deviceLocation.line1);
-      if (deviceLocation.pincode) setPincode(deviceLocation.pincode);
-      if (deviceLocation.latitude != null && deviceLocation.longitude != null) {
-        setCoords({ latitude: deviceLocation.latitude, longitude: deviceLocation.longitude });
+    if (locationStatus === 'found' && locationLine1) {
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
       setSaved(false);
     } else {
-      void deviceLocation.request();
+      void requestLocation();
     }
   };
 
   const applyPickedLocation = (picked: PickedLocation) => {
     setCoords({ latitude: picked.latitude, longitude: picked.longitude });
+    setCoordsPincode(picked.pincode ?? null);
     if (picked.line1) setLine1(picked.line1);
     if (picked.pincode) setPincode(picked.pincode);
     setPickerVisible(false);
     setSaved(false);
   };
 
+  const updatePincode = (t: string) => {
+    setPincode(t);
+    setSaved(false);
+    const trimmed = t.trim();
+    if (coords && coordsPincode && /^\d{6}$/.test(trimmed) && trimmed !== coordsPincode) {
+      setCoords(null);
+      setCoordsPincode(null);
+    }
+  };
+
   // First tap only requests permission; if it resolves after that, apply it
   // as soon as it lands rather than making the person tap again.
   useEffect(() => {
     if (
-      deviceLocation.status === 'found' && deviceLocation.line1 &&
+      locationStatus === 'found' && locationLine1 &&
       line1.trim().length === 0
     ) {
-      setLine1(deviceLocation.line1);
-      if (deviceLocation.pincode) setPincode(deviceLocation.pincode);
-      if (deviceLocation.latitude != null && deviceLocation.longitude != null) {
-        setCoords({ latitude: deviceLocation.latitude, longitude: deviceLocation.longitude });
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceLocation.status]);
+  }, [locationStatus]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -136,7 +163,7 @@ export default function EditDetailsScreen() {
           style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
         >
           <Text style={styles.locationButtonText}>
-            {deviceLocation.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+            {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
         <Pressable
@@ -148,7 +175,7 @@ export default function EditDetailsScreen() {
         </Pressable>
         <TextInput
           value={line1}
-          onChangeText={(t) => { setLine1(t); setCoords(null); setSaved(false); }}
+          onChangeText={(t) => { setLine1(t); setSaved(false); }}
           placeholder="Flat, building and street"
           placeholderTextColor={color.muted}
           style={styles.input}
@@ -164,7 +191,7 @@ export default function EditDetailsScreen() {
         />
         <TextInput
           value={pincode}
-          onChangeText={(t) => { setPincode(t); setCoords(null); setSaved(false); }}
+          onChangeText={updatePincode}
           placeholder="Pincode"
           placeholderTextColor={color.muted}
           style={styles.input}

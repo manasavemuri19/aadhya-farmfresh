@@ -28,12 +28,18 @@ export default function OrderTab() {
   const [category, setCategory] = useState('all');
   const [search, setSearch] = useState('');
   const items = useCart((s) => s.items);
-  const location = useLocationStore();
+  // AAD-MOB-017: individual selectors rather than the whole store — the
+  // no-selector form re-renders this screen (and re-runs the effect below,
+  // since `location` is a fresh object on every store change) on every
+  // location update, not just the ones this screen actually reads.
+  const locationStatus = useLocationStore((s) => s.status);
+  const locationLabel = useLocationStore((s) => s.label);
+  const requestLocation = useLocationStore((s) => s.request);
   const activeOrders = useActiveOrders();
 
   useEffect(() => {
-    if (location.status === 'idle') void location.request();
-  }, [location]);
+    if (locationStatus === 'idle') void requestLocation();
+  }, [locationStatus, requestLocation]);
 
   // This tab is hidden from a delivery agent's tab bar entirely (see
   // (tabs)/_layout.tsx's `href: null`), but the navigator can still land
@@ -105,18 +111,18 @@ export default function OrderTab() {
                 style={[styles.tagline, styles.taglineDark]}
                 numberOfLines={1}
                 onPress={() => {
-                  if (location.status === 'denied' || location.status === 'error') {
+                  if (locationStatus === 'denied' || locationStatus === 'error') {
                     router.push('/profile');
                   } else {
-                    void location.request();
+                    void requestLocation();
                   }
                 }}
               >
-                {location.status === 'found' && location.label
-                  ? `📍 ${location.label}`
-                  : location.status === 'locating'
+                {locationStatus === 'found' && locationLabel
+                  ? `📍 ${locationLabel}`
+                  : locationStatus === 'locating'
                     ? 'Finding your location…'
-                    : location.status === 'denied'
+                    : locationStatus === 'denied'
                       ? 'Tap to set delivery address'
                       : 'Pickles & Dairy'}
               </Text>

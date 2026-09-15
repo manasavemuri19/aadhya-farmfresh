@@ -7,6 +7,12 @@ import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps
 import { Text } from '../../src/components/Text';
 import { Button } from '../../src/components/Button';
 import { ErrorState, Loading } from '../../src/components/Feedback';
+// AAD-MOB-013: this screen renders status-keyed lookups (STEPS, COPY) and a
+// map from server data, so an unexpected status value (AAD-DATA-010) or a
+// stray null is representable here more than most screens — a per-route
+// boundary means that failure replaces this screen only, not the whole
+// stack the customer navigated through to reach it.
+export { AppErrorFallback as ErrorBoundary } from '../../src/components/ErrorBoundary';
 import { ordersApi } from '../../src/api/endpoints';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';

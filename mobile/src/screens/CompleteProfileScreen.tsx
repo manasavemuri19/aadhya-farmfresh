@@ -25,7 +25,14 @@ const PINCODE_PATTERN = /^\d{6}$/;
 export function CompleteProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, setUser, signOut } = useSession();
-  const location = useLocationStore();
+  // AAD-MOB-017: individual selectors rather than the whole store — see
+  // checkout.tsx for the same fix and why.
+  const locationStatus = useLocationStore((s) => s.status);
+  const locationLine1 = useLocationStore((s) => s.line1);
+  const locationPincode = useLocationStore((s) => s.pincode);
+  const locationLatitude = useLocationStore((s) => s.latitude);
+  const locationLongitude = useLocationStore((s) => s.longitude);
+  const requestLocation = useLocationStore((s) => s.request);
 
   const [name, setName] = useState(user?.name ?? '');
   const [phone, setPhone] = useState(user?.phone ?? '');
@@ -33,6 +40,11 @@ export function CompleteProfileScreen() {
   const [landmark, setLandmark] = useState('');
   const [pincode, setPincode] = useState('');
   const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  // Only replaced when the person edits the pincode to a genuinely
+  // different one, or taps "use my current location" — otherwise coords
+  // travel through unchanged while the address text is being corrected
+  // (AAD-MOB-016).
+  const [coordsPincode, setCoordsPincode] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible] = useState(false);
 
   const nameValid = name.trim().length >= 2;
@@ -41,22 +53,33 @@ export function CompleteProfileScreen() {
   const canSave = nameValid && phoneValid && addressValid;
 
   const useCurrentLocation = () => {
-    if (location.status === 'found' && location.line1) {
-      setLine1(location.line1);
-      if (location.pincode) setPincode(location.pincode);
-      if (location.latitude != null && location.longitude != null) {
-        setCoords({ latitude: location.latitude, longitude: location.longitude });
+    if (locationStatus === 'found' && locationLine1) {
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
     } else {
-      void location.request();
+      void requestLocation();
     }
   };
 
   const applyPickedLocation = (picked: PickedLocation) => {
     setCoords({ latitude: picked.latitude, longitude: picked.longitude });
+    setCoordsPincode(picked.pincode ?? null);
     if (picked.line1) setLine1(picked.line1);
     if (picked.pincode) setPincode(picked.pincode);
     setPickerVisible(false);
+  };
+
+  const updatePincode = (t: string) => {
+    setPincode(t);
+    const trimmed = t.trim();
+    if (coords && coordsPincode && PINCODE_PATTERN.test(trimmed) && trimmed !== coordsPincode) {
+      setCoords(null);
+      setCoordsPincode(null);
+    }
   };
 
   const save = useMutation({
@@ -120,7 +143,7 @@ export function CompleteProfileScreen() {
           style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
         >
           <Text style={styles.locationButtonText}>
-            {location.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+            {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
         <Pressable
@@ -132,7 +155,7 @@ export function CompleteProfileScreen() {
         </Pressable>
         <TextInput
           value={line1}
-          onChangeText={(t) => { setLine1(t); setCoords(null); }}
+          onChangeText={setLine1}
           placeholder="Flat, building and street"
           placeholderTextColor={color.muted}
           style={styles.input}
@@ -148,7 +171,7 @@ export function CompleteProfileScreen() {
         />
         <TextInput
           value={pincode}
-          onChangeText={(t) => { setPincode(t); setCoords(null); }}
+          onChangeText={updatePincode}
           placeholder="Pincode"
           placeholderTextColor={color.muted}
           keyboardType="number-pad"

@@ -44,7 +44,6 @@ const API_BASE_URL =
 // the same way the API_BASE_URL fallback does above.
 const easBuildEnv = (() => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     return require('./eas.json')?.build?.production?.env ?? {};
   } catch {
     return {};

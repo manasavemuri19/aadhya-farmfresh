@@ -44,10 +44,25 @@ export default function CheckoutScreen() {
   // null — the two effects below are what set this, mirroring exactly
   // which fields they set alongside.
   const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  // AAD-MOB-016: the pincode the current `coords` actually correspond to.
+  // Editing the address text no longer invalidates coords at all (see the
+  // Field below) — only a pincode change to a genuinely *different*,
+  // complete pincode does, since that's the edit that actually means the
+  // captured point is for the wrong place.
+  const [coordsPincode, setCoordsPincode] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible] = useState(false);
 
   const user = useSession((s) => s.user);
-  const location = useLocationStore();
+  // AAD-MOB-017: selected individually rather than `useLocationStore()` as a
+  // whole, so this screen only re-renders on the specific fields it reads —
+  // a `label` change elsewhere in the store (this screen never reads it)
+  // would otherwise re-render this whole form on every location fetch tick.
+  const locationStatus = useLocationStore((s) => s.status);
+  const locationLine1 = useLocationStore((s) => s.line1);
+  const locationPincode = useLocationStore((s) => s.pincode);
+  const locationLatitude = useLocationStore((s) => s.latitude);
+  const locationLongitude = useLocationStore((s) => s.longitude);
+  const requestLocation = useLocationStore((s) => s.request);
 
   // Fill from a saved profile address first; only reach for device location
   // if there isn't one, and never overwrite something the person has already
@@ -61,26 +76,29 @@ export default function CheckoutScreen() {
       setPincode(saved.pincode ?? '');
       if (saved.latitude != null && saved.longitude != null) {
         setCoords({ latitude: saved.latitude, longitude: saved.longitude });
+        setCoordsPincode(saved.pincode ?? null);
       }
       setPrefilled(true);
     }
   }, [user, prefilled]);
 
   const useCurrentLocation = () => {
-    if (location.status === 'found' && location.line1) {
-      setLine1(location.line1);
-      if (location.pincode) setPincode(location.pincode);
-      if (location.latitude != null && location.longitude != null) {
-        setCoords({ latitude: location.latitude, longitude: location.longitude });
+    if (locationStatus === 'found' && locationLine1) {
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
       setPrefilled(true);
     } else {
-      void location.request();
+      void requestLocation();
     }
   };
 
   const applyPickedLocation = (picked: PickedLocation) => {
     setCoords({ latitude: picked.latitude, longitude: picked.longitude });
+    setCoordsPincode(picked.pincode ?? null);
     if (picked.line1) setLine1(picked.line1);
     if (picked.pincode) setPincode(picked.pincode);
     setPrefilled(true);
@@ -90,14 +108,28 @@ export default function CheckoutScreen() {
   // If the location finishes fetching after the button was already tapped
   // once (first tap only requests permission), apply it as soon as it lands.
   useEffect(() => {
-    if (location.status === 'found' && location.line1 && line1.trim().length === 0) {
-      setLine1(location.line1);
-      if (location.pincode) setPincode(location.pincode);
-      if (location.latitude != null && location.longitude != null) {
-        setCoords({ latitude: location.latitude, longitude: location.longitude });
+    if (locationStatus === 'found' && locationLine1 && line1.trim().length === 0) {
+      setLine1(locationLine1);
+      if (locationPincode) setPincode(locationPincode);
+      if (locationLatitude != null && locationLongitude != null) {
+        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+        setCoordsPincode(locationPincode ?? null);
       }
     }
-  }, [location.status]);
+  }, [locationStatus]);
+
+  // AAD-MOB-016: a *complete*, genuinely different pincode is the edit that
+  // invalidates a captured point — a still-in-progress edit (fewer than 6
+  // digits) isn't, so this doesn't clear coords on every keystroke while
+  // someone is mid-correction.
+  const updatePincode = (t: string) => {
+    setPincode(t);
+    const trimmed = t.trim();
+    if (coords && coordsPincode && /^\d{6}$/.test(trimmed) && trimmed !== coordsPincode) {
+      setCoords(null);
+      setCoordsPincode(null);
+    }
+  };
 
   const lines = useMemo(() => cartLines(items), [items]);
 
@@ -176,7 +208,7 @@ export default function CheckoutScreen() {
           style={({ pressed }) => [styles.locationButton, pressed && styles.locationButtonPressed]}
         >
           <Text style={styles.locationButtonText}>
-            {location.status === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
+            {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
         <Pressable
@@ -190,7 +222,7 @@ export default function CheckoutScreen() {
         <Field
           label="Flat, building and street"
           value={line1}
-          onChangeText={(t) => { setLine1(t); setCoords(null); }}
+          onChangeText={setLine1}
           placeholder="12-3-45, Rose Villa, Banjara Hills"
           autoComplete="street-address"
         />
@@ -203,7 +235,7 @@ export default function CheckoutScreen() {
         <Field
           label="Pincode"
           value={pincode}
-          onChangeText={(t) => { setPincode(t); setCoords(null); }}
+          onChangeText={updatePincode}
           placeholder="500034"
           keyboardType="number-pad"
           maxLength={6}
@@ -275,8 +307,8 @@ export default function CheckoutScreen() {
 
       <LocationPickerModal
         visible={pickerVisible}
-        initialCoords={coords ?? (location.latitude != null && location.longitude != null
-          ? { latitude: location.latitude, longitude: location.longitude }
+        initialCoords={coords ?? (locationLatitude != null && locationLongitude != null
+          ? { latitude: locationLatitude, longitude: locationLongitude }
           : null)}
         onConfirm={applyPickedLocation}
         onClose={() => setPickerVisible(false)}
