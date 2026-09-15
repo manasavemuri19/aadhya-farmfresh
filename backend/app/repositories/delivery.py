@@ -12,12 +12,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Order as OrderRow
-from app.db.models import OrderLine
 from app.domain.enums import OrderStatus
 
 # Delivered/cancelled/refunded orders are done, from an agent's point of
@@ -27,6 +26,11 @@ _ONGOING_STATUSES = {
     OrderStatus.PACKED.value,
     OrderStatus.OUT_FOR_DELIVERY.value,
 }
+
+# AAD-REL-006: staff can reassign an order in any of these — the same set
+# an agent can still be actively working. DELIVERED/CANCELLED/REFUNDED have
+# nothing left to reassign.
+_REASSIGNABLE_STATUSES = _ONGOING_STATUSES
 
 
 def _to_dict(row: OrderRow) -> dict[str, Any]:
@@ -126,6 +130,39 @@ class DeliveryRepository:
         )
         row = (await self.session.execute(stmt)).scalars().first()
         return _to_dict(row) if row else None
+
+    async def count_ongoing(self, agent_id: str) -> int:
+        """AAD-SEC-029: count only, no full-row loading — used by
+        DeliveryService.accept to enforce a concurrent-order cap before
+        accepting a new one."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(OrderRow)
+            .where(
+                OrderRow.delivery_agent_id == agent_id,
+                OrderRow.status.in_(_ONGOING_STATUSES),
+            )
+        )
+        return result.scalar_one()
+
+    async def reassign(self, order_id: str, *, new_agent_id: str | None) -> bool:
+        """AAD-REL-006: staff-only escape hatch — unlike `release` (agent-
+        initiated, CONFIRMED-only), this works regardless of which agent
+        currently holds the order, across any status still actively being
+        worked. Passing new_agent_id=None sends it back to the unassigned
+        pool (same effect as release, but usable past CONFIRMED)."""
+        result = await self.session.execute(
+            update(OrderRow)
+            .where(
+                OrderRow.id == order_id,
+                OrderRow.status.in_(_REASSIGNABLE_STATUSES),
+            )
+            .values(
+                delivery_agent_id=new_agent_id,
+                delivery_assigned_at=datetime.now(UTC) if new_agent_id else None,
+            )
+        )
+        return result.rowcount == 1
 
     async def release(self, order_id: str, agent_id: str) -> bool:
         """The mirror image of `accept`: only the agent currently holding the

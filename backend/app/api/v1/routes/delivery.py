@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import DeliveryAgentUser, get_delivery_service
 from app.api.route import TransactionalRoute
-from app.schemas.delivery import AgentLocationUpdate, DeliveryOrderView, UpdateDeliveryStatusRequest
+from app.schemas.delivery import (
+    AgentLocationUpdate,
+    DeliveryOrderView,
+    DeliveryRequestView,
+    UpdateDeliveryStatusRequest,
+)
 from app.services.delivery_service import DeliveryService
 
 router = APIRouter(prefix="/delivery", tags=["delivery"], route_class=TransactionalRoute)
@@ -16,8 +21,10 @@ router = APIRouter(prefix="/delivery", tags=["delivery"], route_class=Transactio
 Delivery = Annotated[DeliveryService, Depends(get_delivery_service)]
 
 
-@router.get("/requests", response_model=list[DeliveryOrderView])
-async def new_requests(agent: DeliveryAgentUser, svc: Delivery) -> list[DeliveryOrderView]:
+@router.get("/requests", response_model=list[DeliveryRequestView])
+async def new_requests(agent: DeliveryAgentUser, svc: Delivery) -> list[DeliveryRequestView]:
+    """AAD-SEC-030: the lean pre-accept view — see DeliveryService.list_requests
+    and DeliveryRequestView's own docstring for why this isn't DeliveryOrderView."""
     return await svc.list_requests(agent.user_id)
 
 

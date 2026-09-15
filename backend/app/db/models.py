@@ -100,6 +100,13 @@ class User(Base, TimestampMixin):
     last_lat: Mapped[float | None] = mapped_column(Float)
     last_lng: Mapped[float | None] = mapped_column(Float)
     last_location_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # AAD-SEC-028: set when a reported position implies a physically
+    # implausible speed from the previous reading (see
+    # UserRepository.update_agent_location). Flagged rather than rejected —
+    # the update is still stored — since the app has no retry UX for a
+    # refused location report today, and GPS noise after an idle period can
+    # look identical to a spoofed jump.
+    last_location_flagged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     addresses: Mapped[list[Address]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"

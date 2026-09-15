@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from app.core.errors import Conflict, Forbidden
-from app.domain.enums import OrderStatus
+import logging
+
+from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
+from app.domain.enums import OrderStatus, Role
 from app.domain.geo import haversine_km
 from app.repositories.delivery import DeliveryRepository
 from app.repositories.users import UserRepository
-from app.schemas.delivery import DeliveryOrderView
+from app.schemas.delivery import DeliveryOrderView, DeliveryRequestView
 from app.services.order_service import OrderService
 
 # Widened one km at a time until someone could plausibly take the job, or
@@ -15,6 +17,23 @@ from app.services.order_service import OrderService
 _START_RADIUS_KM = 2.0
 _RADIUS_STEP_KM = 1.0
 _MAX_RADIUS_KM = 15.0
+
+# AAD-SEC-030: when an agent hasn't shared a location yet, there's nothing to
+# sort or radius-filter by — but "everything, unfiltered" used to mean every
+# paid-and-waiting order in the farm handed to one agent's screen at once.
+# Oldest-first (list_new_requests' own ordering) plus a cap still gets a
+# just-opened-the-app agent useful work without that.
+_UNLOCATED_FALLBACK_LIMIT = 20
+
+# AAD-SEC-029: one agent holding an unbounded number of orders "in flight"
+# at once is either a stuck/abandoned batch or a way to sit on every order
+# in the queue without delivering any of them. 5 is generous for a single
+# scooter/bike run around a small delivery radius — comfortably above what
+# one trip normally carries — while still being an actual limit rather than
+# a number nobody could ever hit.
+_MAX_CONCURRENT_ORDERS = 5
+
+log = logging.getLogger(__name__)
 
 # The only statuses an agent can move an order into themselves. Confirming
 # (that's payment), cancelling and refunding stay staff/admin-only via
@@ -39,7 +58,12 @@ class DeliveryService:
         self.users = users
         self.orders = orders
 
-    async def list_requests(self, agent_id: str) -> list[DeliveryOrderView]:
+    async def list_requests(self, agent_id: str) -> list[DeliveryRequestView]:
+        """AAD-SEC-030: this is the pre-accept list — every agent sees every
+        not-yet-taken order here, so it deliberately returns the lean
+        DeliveryRequestView (no address, no notes, no order value) rather
+        than the full DeliveryOrderView. An agent gets the full picture only
+        for orders they've actually accepted (list_ongoing, accept)."""
         candidates = await self.deliveries.list_new_requests()
         agent_location = await self.users.get_agent_location(agent_id)
 
@@ -55,8 +79,8 @@ class DeliveryService:
                 # Either the agent hasn't shared a location yet, or this
                 # particular order's address has no coordinates on it (an
                 # old order, or a hand-typed address). Either way there's
-                # nothing to measure — it goes out unfiltered rather than
-                # silently never reaching anyone.
+                # nothing to measure against — see _UNLOCATED_FALLBACK_LIMIT
+                # for how this no-longer goes out completely unfiltered.
                 unlocated.append(order)
         located.sort(key=lambda pair: pair[1])
 
@@ -67,13 +91,27 @@ class DeliveryService:
                 radius += _RADIUS_STEP_KM
                 within = [pair for pair in located if pair[1] <= radius]
             located = within
+        else:
+            # list_new_requests already orders oldest-first; take the cap
+            # off the front rather than an arbitrary slice.
+            unlocated = unlocated[:_UNLOCATED_FALLBACK_LIMIT]
 
         ordered: list[tuple[dict, float | None]] = [
             (order, distance) for order, distance in located
         ] + [(order, None) for order in unlocated]
 
+        # DeliveryRequestView is deliberately narrower than the dict
+        # list_new_requests returns (Schema forbids extra fields, so the
+        # full dict can't just be splatted in here) — picked explicitly
+        # rather than widening the view to match.
         return [
-            DeliveryOrderView(distance_km=round(distance, 1) if distance is not None else None, **order)
+            DeliveryRequestView(
+                id=order["id"],
+                order_number=order["order_number"],
+                item_count=order["item_count"],
+                created_at=order["created_at"],
+                distance_km=round(distance, 1) if distance is not None else None,
+            )
             for order, distance in ordered
         ]
 
@@ -82,10 +120,63 @@ class DeliveryService:
         return [DeliveryOrderView(distance_km=None, **order) for order in orders]
 
     async def accept(self, order_id: str, agent_id: str) -> DeliveryOrderView:
+        # AAD-SEC-029: checked before the CAS, not after — no point taking
+        # the compare-and-swap on the order row just to throw the result
+        # away. This is a live count each time (not a cached counter), so
+        # it's always the agent's real current load, including anything a
+        # staff reassign (see `reassign`) may have just added to it.
+        ongoing_count = await self.deliveries.count_ongoing(agent_id)
+        if ongoing_count >= _MAX_CONCURRENT_ORDERS:
+            raise Conflict(
+                f"You already have {ongoing_count} orders in progress — finish or release "
+                "one before accepting another."
+            )
+
         order = await self.deliveries.accept(order_id, agent_id)
         if order is None:
             raise Conflict("This order has already been accepted, or is no longer available.")
         return DeliveryOrderView(distance_km=None, **order)
+
+    async def reassign(
+        self, order_id: str, *, new_agent_id: str | None, actor_id: str, note: str = ""
+    ) -> None:
+        """AAD-REL-006: staff move an order to a different agent (or back to
+        the unassigned pool with new_agent_id=None) — an agent's stuck
+        vehicle, a no-show, a shift change. Unlike `accept`, this is a
+        staff action and deliberately does not enforce
+        _MAX_CONCURRENT_ORDERS: that cap exists to stop an agent from
+        self-serve hoarding orders, not to block a farm staff member from
+        handing someone an order in an emergency.
+
+        No OrderEvent is recorded: OrderEvent.status is CHECK-constrained to
+        real OrderStatus values (ck_order_event_status_valid, Batch 4b), and
+        a reassignment doesn't change the order's status — there's no valid
+        status to attach a synthetic event to without either loosening that
+        constraint or recording a misleading one. This logs instead, same
+        as the location-jump flag (AAD-SEC-028) — visible to anyone
+        reviewing logs, without overloading a status-transition table with
+        an event that isn't one.
+        """
+        if new_agent_id is not None:
+            agent = await self.users.get_by_id(new_agent_id)
+            if agent is None or agent.get("role") != Role.DELIVERY_AGENT.value:
+                raise ValidationError("new_agent_id must be an existing delivery agent.")
+
+        ok = await self.deliveries.reassign(order_id, new_agent_id=new_agent_id)
+        if not ok:
+            raise NotFound(
+                "No such order, or it's already delivered/cancelled/refunded and has "
+                "nothing left to reassign."
+            )
+        log.info(
+            "delivery_order_reassigned",
+            extra={
+                "order_id": order_id,
+                "new_agent_id": new_agent_id,
+                "actor_id": actor_id,
+                "note": note,
+            },
+        )
 
     async def release(self, order_id: str, agent_id: str) -> None:
         """Let an agent back out of an order they accepted, sending it back
@@ -113,7 +204,9 @@ class DeliveryService:
         already the one place that logic lives.
         """
         if new_status not in _AGENT_ALLOWED_STATUSES:
-            raise Forbidden("Delivery agents can only mark an order Packed, On the way, or Delivered.")
+            raise Forbidden(
+                "Delivery agents can only mark an order Packed, On the way, or Delivered."
+            )
 
         existing = await self.deliveries.get_one(order_id, agent_id)
         if existing is None:

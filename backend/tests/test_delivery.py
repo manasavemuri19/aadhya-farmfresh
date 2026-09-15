@@ -57,8 +57,14 @@ def users_repo(session) -> UserRepository:
 
 
 @pytest.fixture
-def delivery_service(delivery_repo, users_repo) -> DeliveryService:
-    return DeliveryService(delivery_repo, users_repo)
+def delivery_service(delivery_repo, users_repo, order_service) -> DeliveryService:
+    # Stale since DeliveryService.update_status started delegating the
+    # actual transition to OrderService (see delivery_service.py) — this
+    # fixture was never updated to pass it, so every test in this file has
+    # been erroring at setup, not failing on its own merits. Fixed here
+    # rather than left as baseline noise, since Batch 4d's own new tests
+    # need a working fixture in the same file.
+    return DeliveryService(delivery_repo, users_repo, order_service)
 
 
 async def test_confirmed_unassigned_order_is_a_request(

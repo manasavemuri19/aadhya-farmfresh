@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,11 +14,29 @@ from app.core.ids import new_user_id
 from app.db.models import Address as AddressRow
 from app.db.models import User as UserRow
 from app.domain.enums import Role
+from app.domain.geo import haversine_km
 
 # AAD-SEC-010: "10 is generous" per the audit's own suggestion — plenty for
 # home/work/a couple of relatives' addresses, nowhere near enough to matter
 # for the eager `selectin` load on every user read.
 MAX_ADDRESSES_PER_USER = 10
+
+# AAD-SEC-028: a delivery bike or car in Hyderabad traffic does not sustain
+# this speed between two GPS fixes. Deliberately generous — well above any
+# real delivery, including a fast highway stretch — since the cost of a
+# false positive (a real report gets flagged) is just noise in a field
+# nothing currently blocks on, while the cost of a false negative (a
+# spoofed jump goes unflagged) is silent. Flagged, not rejected: the update
+# is still stored, since the app has no retry UX for a refused report today
+# and GPS drift after an idle period can look identical to a genuine jump.
+_MAX_PLAUSIBLE_SPEED_KMH = 120.0
+# Below this interval, any distance implies an enormous — and mostly
+# meaningless — speed (a phone can send two updates a second apart on a
+# flaky connection's retry). Skip the plausibility check rather than flag
+# on noise the interval itself explains.
+_MIN_CHECK_INTERVAL_SECONDS = 5.0
+
+log = logging.getLogger(__name__)
 
 
 def _to_dict(user: UserRow) -> dict[str, Any]:
@@ -203,12 +222,43 @@ class UserRepository:
             return None
         return (row.last_lat, row.last_lng)
 
-    async def update_agent_location(self, user_id: str, *, latitude: float, longitude: float) -> None:
+    async def update_agent_location(
+        self, user_id: str, *, latitude: float, longitude: float
+    ) -> bool:
+        """Writes the new position unconditionally, and returns whether this
+        update was flagged (AAD-SEC-028): implausible if the implied speed
+        from the previous reading exceeds `_MAX_PLAUSIBLE_SPEED_KMH`, over an
+        interval long enough that the speed figure actually means something
+        (`_MIN_CHECK_INTERVAL_SECONDS`). The bounding-box check (are these
+        coordinates even in Hyderabad) lives in the schema layer
+        (`AgentLocationUpdate`) — this is the second, independent layer: is
+        this move from the *previous* position physically plausible.
+        """
+        previous = await self.get_agent_location_with_time(user_id)
+        flagged = False
+        now = datetime.now(UTC)
+        if previous is not None:
+            prev_lat, prev_lng, prev_at = previous
+            elapsed_seconds = (now - prev_at).total_seconds()
+            if elapsed_seconds >= _MIN_CHECK_INTERVAL_SECONDS:
+                distance_km = haversine_km(prev_lat, prev_lng, latitude, longitude)
+                speed_kmh = distance_km / (elapsed_seconds / 3600)
+                flagged = speed_kmh > _MAX_PLAUSIBLE_SPEED_KMH
+
         await self.session.execute(
             update(UserRow)
             .where(UserRow.id == user_id)
-            .values(last_lat=latitude, last_lng=longitude, last_location_at=datetime.now(UTC))
+            .values(
+                last_lat=latitude, last_lng=longitude, last_location_at=now,
+                last_location_flagged=flagged,
+            )
         )
+        if flagged:
+            log.warning(
+                "agent_location_jump_flagged",
+                extra={"user_id": user_id, "latitude": latitude, "longitude": longitude},
+            )
+        return flagged
 
     async def get_agent_location_with_time(
         self, user_id: str
@@ -218,7 +268,12 @@ class UserRepository:
         return shape, since that one is unpacked positionally as exactly two
         floats in DeliveryService.list_requests."""
         row = await self.session.get(UserRow, user_id)
-        if row is None or row.last_lat is None or row.last_lng is None or row.last_location_at is None:
+        if (
+            row is None
+            or row.last_lat is None
+            or row.last_lng is None
+            or row.last_location_at is None
+        ):
             return None
         return (row.last_lat, row.last_lng, row.last_location_at)
 

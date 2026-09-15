@@ -11,19 +11,28 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import AdminUser, StaffUser, get_order_repo, get_order_service, get_product_repo
+from app.api.deps import (
+    AdminUser,
+    StaffUser,
+    get_delivery_service,
+    get_order_repo,
+    get_order_service,
+    get_product_repo,
+)
 from app.api.route import TransactionalRoute
 from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.domain.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
 from app.schemas.catalog import Product
+from app.schemas.delivery import ReassignDeliveryRequest
 from app.schemas.order import (
     AdjustStockRequest,
     OrderView,
     SetPriceRequest,
     UpdateOrderStatusRequest,
 )
+from app.services.delivery_service import DeliveryService
 from app.services.order_service import OrderService
 
 router = APIRouter(prefix="/admin", tags=["admin"], route_class=TransactionalRoute)
@@ -31,6 +40,7 @@ router = APIRouter(prefix="/admin", tags=["admin"], route_class=TransactionalRou
 Products = Annotated[ProductRepository, Depends(get_product_repo)]
 Orders = Annotated[OrderService, Depends(get_order_service)]
 OrderRepo = Annotated[OrderRepository, Depends(get_order_repo)]
+Deliveries = Annotated[DeliveryService, Depends(get_delivery_service)]
 
 
 @router.get("/products", response_model=list[Product])
@@ -164,6 +174,18 @@ async def update_order_status(
     return await svc.update_status(
         order_id=order_id, new_status=body.status, note=body.note, actor=staff.user_id
     )
+
+
+@router.post("/orders/{order_id}/reassign", status_code=204)
+async def reassign_delivery(
+    order_id: str, body: ReassignDeliveryRequest, staff: StaffUser, svc: Deliveries
+) -> None:
+    """AAD-REL-006: move an order to a different delivery agent, or back to
+    the unassigned pool (agent_id omitted/null) — a stuck agent, a no-show,
+    a shift change. Staff-only: unlike an agent's own accept/release, this
+    isn't scoped to CONFIRMED and doesn't check the agent's own concurrent-
+    order cap (see DeliveryService.reassign for why)."""
+    await svc.reassign(order_id, new_agent_id=body.agent_id, actor_id=staff.user_id, note=body.note)
 
 
 @router.post("/maintenance/release-holds", response_model=dict)
