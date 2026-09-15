@@ -11,10 +11,12 @@ import { DMSans_400Regular, DMSans_500Medium, DMSans_700Bold } from '@expo-googl
 import { DMMono_400Regular, DMMono_500Medium } from '@expo-google-fonts/dm-mono';
 
 import { useSession } from '../src/store/session';
-import { ApiError } from '../src/api/client';
+import { ApiError, getApiBaseUrl, isApiBaseUrlUnconfigured } from '../src/api/client';
 import { color } from '../src/theme/tokens';
 import { LoginScreen } from '../src/screens/LoginScreen';
 import { CompleteProfileScreen } from '../src/screens/CompleteProfileScreen';
+import { EnvironmentBanner } from '../src/components/EnvironmentBanner';
+import { ErrorState } from '../src/components/Feedback';
 import { registerForPushNotifications } from '../src/lib/pushNotifications';
 
 // AAD-MOB-013: catches a render error anywhere in this app — including one
@@ -73,6 +75,21 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => { void restore(); }, [restore]);
+  // AAD-MOB-003: "fail loudly in dev when config is missing" — a forgotten
+  // .env on a fresh checkout is otherwise silent (the fallback URL just
+  // doesn't answer, which looks like an ordinary network error). This is
+  // the one unmissable signal in the one place a developer will actually
+  // look. <EnvironmentBanner /> covers the always-visible on-screen half.
+  useEffect(() => {
+    if (__DEV__ && isApiBaseUrlUnconfigured()) {
+      console.error(
+        `[Aadya] No EXPO_PUBLIC_API_BASE_URL configured and no EAS build/update ` +
+          `context detected — falling back to ${getApiBaseUrl()}. Set ` +
+          `EXPO_PUBLIC_API_BASE_URL (see mobile/.env.example) before testing anything ` +
+          `that talks to the backend.`,
+      );
+    }
+  }, []);
   useEffect(() => {
     if ((fontsLoaded || fontError) && status !== 'loading') void SplashScreen.hideAsync();
   }, [fontsLoaded, fontError, status]);
@@ -96,8 +113,20 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
+        <EnvironmentBanner />
         {status === 'signed_out' ? (
           <LoginScreen />
+        ) : status === 'degraded' ? (
+          // AAD-MOB-002: the profile fetch failed for a reason that says
+          // nothing about whether the session is still valid — a dropped
+          // packet, a timeout, a cold-starting backend, a 500. Tokens were
+          // kept (see session.ts's restore()); this is a retry, not a
+          // re-login.
+          <ErrorState
+            title="Couldn't reach the server"
+            message="Check your connection and try again. You're still signed in."
+            onRetry={() => void restore()}
+          />
         ) : !isProfileComplete(user) ? (
           <CompleteProfileScreen />
         ) : (

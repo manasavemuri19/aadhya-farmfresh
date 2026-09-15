@@ -19,16 +19,49 @@
 // IMPORTANT: eas.json's per-profile `env` block is only read by `eas build`.
 // `eas update` bundles locally, using whatever is in the calling shell's
 // environment at that moment — it does NOT read eas.json's build.*.env at
-// all. A person running `eas update` from a plain terminal without that
-// variable set would otherwise silently publish a build pointed at nothing.
-// So the fallback here is the real, current production API — not a
-// deliberately-broken placeholder — because that failure mode has actually
-// happened and cost real debugging time. EXPO_PUBLIC_API_BASE_URL still
-// overrides this whenever it *is* set (e.g. during a real `eas build`,
-// or a local dev server pointed at a different backend).
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ??
-  'https://aadhya-farmfresh-production.up.railway.app/v1';
+// all. A person running `eas update` (or a bare `expo start`) without that
+// variable set would otherwise silently point the bundle at whatever this
+// fallback is.
+//
+// AAD-SEC/AAD-MOB-003 (2026-09-15): that fallback used to be the real
+// production API, on the theory that a deliberately-broken placeholder
+// "cost real debugging time once already". The actual cost of the opposite
+// mistake is worse: a misconfigured dev build silently creating real
+// orders, decrementing real stock, and sending real payment links and real
+// pushes to real customers, with nothing on screen to say so. `eas build`
+// never needs this fallback at all — every profile below sets
+// EXPO_PUBLIC_API_BASE_URL explicitly — so the only paths that ever reach
+// it are `eas update` run without the variable exported, or local
+// development. A development URL is the right fallback for both: nothing
+// answers on a phone's own LAN address unless the dev server is actually
+// running there, so the failure is loud and immediate instead of silent and
+// destructive. `src/api/client.ts`'s `getApiBaseUrl()` defers to this same
+// computed `extra.apiBaseUrl` value rather than keeping its own separate
+// fallback literal — one source, not two that can drift.
+const DEV_FALLBACK_API_BASE_URL = 'http://192.168.1.5:8000/v1';
+
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? DEV_FALLBACK_API_BASE_URL;
+
+// Best-effort label for the on-screen environment banner
+// (`src/components/EnvironmentBanner.tsx`) — nothing safety-critical reads
+// this. EAS sets one of these two env vars at config-eval time, matching
+// the profile/channel name: EAS_BUILD_PROFILE during `eas build`,
+// EAS_UPDATE_CHANNEL during `eas update --channel <name>`. Neither present
+// means this is a bare `expo start` with no EAS context at all — always
+// 'development' by definition, never silently 'production'.
+const API_ENVIRONMENT =
+  process.env.EAS_BUILD_PROFILE ?? process.env.EAS_UPDATE_CHANNEL ?? 'development';
+
+// True only when NEITHER an explicit EXPO_PUBLIC_API_BASE_URL NOR a
+// recognised EAS build/update context was present — a forgotten `.env` on a
+// fresh checkout, not a deliberate preview/production build. This is the
+// specific case the fix note means by "fail loudly in dev when config is
+// missing": `EnvironmentBanner` shows an unmissable warning for this case
+// specifically, not just the ordinary "development" badge.
+const API_BASE_URL_IS_FALLBACK =
+  !process.env.EXPO_PUBLIC_API_BASE_URL &&
+  !process.env.EAS_BUILD_PROFILE &&
+  !process.env.EAS_UPDATE_CHANNEL;
 
 // Google OAuth client IDs — same "read at config-eval time, safe default"
 // approach as API_BASE_URL above.
@@ -159,6 +192,8 @@ module.exports = {
     },
     extra: {
       apiBaseUrl: API_BASE_URL,
+      apiEnvironment: API_ENVIRONMENT,
+      apiBaseUrlIsFallback: API_BASE_URL_IS_FALLBACK,
       googleWebClientId: GOOGLE_WEB_CLIENT_ID,
       googleAndroidClientId: GOOGLE_ANDROID_CLIENT_ID,
       eas: { projectId: '1b00b0a2-aeb0-4d97-adb0-344bd89331ae' },

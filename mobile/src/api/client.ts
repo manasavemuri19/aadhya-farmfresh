@@ -16,15 +16,21 @@ import Constants from 'expo-constants';
 import type { ApiErrorBody, TokenPair } from './types';
 import { tokenStore } from '../store/tokenStore';
 
-// Reached if both EXPO_PUBLIC_API_BASE_URL (bundler inlining) and
-// Constants.expoConfig.extra.apiBaseUrl (app.config.js) are absent — which
-// does happen in practice: `eas update` bundles locally using whatever is in
-// the calling shell, and neither of those sources gets set automatically the
-// way eas.json's env block does for `eas build`. This is the real production
-// API, not a placeholder — a deliberately-broken fallback here cost real
-// debugging time once already, for no benefit over just pointing at the
-// backend that actually exists.
-const FALLBACK_BASE_URL = 'https://aadhya-farmfresh-production.up.railway.app/v1';
+// AAD-MOB-003: this used to fall back to the real production API. A
+// misconfigured dev build then silently talked to production — real orders,
+// real stock decrements, real payment links and real pushes to real
+// customers — with nothing on screen to say which environment it was
+// hitting. `eas build` never actually needs this fallback: every profile in
+// eas.json sets EXPO_PUBLIC_API_BASE_URL explicitly. The only way this
+// literal is ever reached is `eas update` run from a shell that hasn't
+// exported the variable, or a bare `expo start` on a fresh checkout — and
+// for both of those, a development URL is the correct fallback: nothing
+// answers on a phone's own LAN address that isn't actually running the dev
+// server, so the failure is loud and immediate, never silent and
+// destructive. `app.config.js` computes the same value the same way — this
+// is the single literal both files defer to, not a second, independently
+// maintained one; see `getApiBaseUrl()` below for how the two combine.
+const DEV_FALLBACK_BASE_URL = 'http://192.168.1.5:8000/v1';
 // Railway's free tier sleeps the backend when idle; the first request after
 // that has to wait for a cold boot, which can take 30s+. A short timeout here
 // turns that normal wake-up into a scary "took too long" error on the user's
@@ -44,8 +50,28 @@ export function getApiBaseUrl(): string {
   return (
     process.env.EXPO_PUBLIC_API_BASE_URL ??
     (Constants.expoConfig?.extra?.apiBaseUrl as string | undefined) ??
-    FALLBACK_BASE_URL
+    DEV_FALLBACK_BASE_URL
   );
+}
+
+// AAD-MOB-003: the rest of this app's "which environment am I talking to"
+// question is answered from the single value `app.config.js` computes,
+// never re-derived here. `apiEnvironment` is a best-effort label (the real
+// EAS build profile or update channel when one was detected at config-eval
+// time; 'development' otherwise, never silently 'production') used only to
+// decide whether to show the on-screen environment banner — nothing safety-
+// critical depends on it. `apiBaseUrlIsFallback` is narrower and is: true
+// only when NEITHER an explicit EXPO_PUBLIC_API_BASE_URL NOR a recognised
+// EAS build/update context was present at all — a forgotten `.env` on a
+// fresh checkout, not a deliberate preview/production build. That's the
+// specific case the fix note means by "fail loudly in dev when config is
+// missing", surfaced by <EnvironmentBanner /> in `app/_layout.tsx`.
+export function getApiEnvironment(): string {
+  return (Constants.expoConfig?.extra?.apiEnvironment as string | undefined) ?? 'development';
+}
+
+export function isApiBaseUrlUnconfigured(): boolean {
+  return Boolean(Constants.expoConfig?.extra?.apiBaseUrlIsFallback);
 }
 
 export class ApiError extends Error {
@@ -75,30 +101,75 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
-/** Shared promise so concurrent 401s trigger exactly one refresh. */
-let refreshInFlight: Promise<boolean> | null = null;
+// AAD-MOB-001: `refreshTokens()` used to return a plain boolean, so a
+// rejected refresh token (the session really is over) and a dropped packet
+// or a cold-starting backend (the session says nothing about being over)
+// were indistinguishable to the caller — both wiped the keychain. A tri-
+// state return lets `send()` below clear tokens only when the server
+// actually rejected the refresh token; a network failure keeps the session
+// and surfaces the original problem instead.
+type RefreshResult = 'refreshed' | 'rejected' | 'unavailable';
 
-async function refreshTokens(): Promise<boolean> {
+// Bounded retry with jitter, only for the 'unavailable' case (a dropped
+// packet, a timeout, a cold start) — never for 'rejected', where retrying
+// would just ask the same already-invalid token again. Full-jitter
+// exponential backoff (0..base*2^attempt), capped low: this runs inside a
+// user-visible request, so it should smooth over a single bad moment on a
+// patchy connection, not turn into its own multi-second stall.
+const REFRESH_RETRY_ATTEMPTS = 2;
+const REFRESH_RETRY_BASE_MS = 250;
+
+function jitterDelayMs(attempt: number): number {
+  return Math.random() * REFRESH_RETRY_BASE_MS * 2 ** attempt;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function attemptRefreshOnce(refreshToken: string): Promise<RefreshResult> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    // 401/403 means the server looked at this specific refresh token and
+    // rejected it — expired, revoked, already used. Nothing else does:
+    // a 5xx or a malformed response says the *server*, not the token, is the
+    // problem, and is worth retrying rather than treating as a dead session.
+    if (response.status === 401 || response.status === 403) return 'rejected';
+    if (!response.ok) return 'unavailable';
+    const tokens = (await response.json()) as TokenPair;
+    await tokenStore.save(tokens);
+    return 'refreshed';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+/** Shared promise so concurrent 401s trigger exactly one refresh. */
+let refreshInFlight: Promise<RefreshResult> | null = null;
+
+async function refreshTokens(): Promise<RefreshResult> {
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
-    const refreshToken = await tokenStore.getRefreshToken();
-    if (!refreshToken) return false;
     try {
-      const response = await fetch(`${getApiBaseUrl()}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (!response.ok) {
-        await tokenStore.clear();
-        return false;
+      const refreshToken = await tokenStore.getRefreshToken();
+      // No refresh token stored at all isn't a network condition — there is
+      // nothing to retry our way out of.
+      if (!refreshToken) return 'rejected';
+
+      let result: RefreshResult = 'unavailable';
+      for (let attempt = 0; attempt <= REFRESH_RETRY_ATTEMPTS; attempt++) {
+        result = await attemptRefreshOnce(refreshToken);
+        if (result !== 'unavailable') break;
+        if (attempt < REFRESH_RETRY_ATTEMPTS) await sleep(jitterDelayMs(attempt));
       }
-      const tokens = (await response.json()) as TokenPair;
-      await tokenStore.save(tokens);
-      return true;
-    } catch {
-      return false;
+
+      if (result === 'rejected') await tokenStore.clear();
+      return result;
     } finally {
       refreshInFlight = null;
     }
@@ -146,14 +217,46 @@ async function send<T>(path: string, options: RequestOptions, retrying = false):
   // A 401 on an authenticated call means the access token aged out. Refresh
   // once, then replay. `retrying` stops an infinite loop if refresh also 401s.
   if (response.status === 401 && auth && !retrying) {
-    if (await refreshTokens()) return send<T>(path, options, true);
-    await tokenStore.clear();
+    const result = await refreshTokens();
+    if (result === 'refreshed') return send<T>(path, options, true);
+    if (result === 'unavailable') {
+      // AAD-MOB-001: the refresh token might still be perfectly good — the
+      // network just didn't cooperate. Tokens are NOT cleared here (see
+      // refreshTokens()); surface the real problem and let the caller retry
+      // the whole request later, rather than reporting the original
+      // resource's 401 (misleading — this request was never actually denied
+      // access, its token just couldn't be renewed in time).
+      throw new ApiError(
+        0,
+        'network_error',
+        'No connection. Check your network and try again.',
+      );
+    }
+    // 'rejected' — tokens already cleared inside refreshTokens(). Fall
+    // through to the original 401 response below, same as before this fix.
   }
 
   if (response.status === 204) return undefined as T;
 
   const text = await response.text();
-  const payload: unknown = text ? JSON.parse(text) : null;
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      // AAD-MOB-004: Railway and most proxies return an HTML error page for
+      // 502/503/504, not JSON. An unguarded JSON.parse throws a SyntaxError
+      // here, which isn't an ApiError, so every caller's `instanceof
+      // ApiError` branch is bypassed and the app shows an unhandled crash
+      // instead of "try again". Treating an unparsable body the same as an
+      // empty one lets the existing logic below do the right thing either
+      // way: the `!response.ok` branch synthesizes a generic ApiError from
+      // a null payload (there's no `error.code` to read, so it uses its own
+      // fallback message), and a 2xx with an unparsable body degrades to
+      // `null` rather than crashing.
+      payload = null;
+    }
+  }
 
   if (!response.ok) {
     const err = (payload as ApiErrorBody | null)?.error;
