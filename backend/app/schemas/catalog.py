@@ -45,8 +45,11 @@ class Variant(Schema):
 
     @model_validator(mode="after")
     def _check_discount(self) -> Variant:
-        if self.mrp_paise is not None and self.mrp_paise <= self.price_paise:
-            raise ValueError("mrp_paise must be greater than price_paise")
+        # AAD-DATA-009: was strict `<=` (i.e. required mrp > price), which
+        # made list-price selling — no active discount — a validation
+        # error. `<` still rejects the nonsense case (MRP below price).
+        if self.mrp_paise is not None and self.mrp_paise < self.price_paise:
+            raise ValueError("mrp_paise must be at least price_paise")
         return self
 
     @property

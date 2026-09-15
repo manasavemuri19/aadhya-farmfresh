@@ -46,11 +46,17 @@ from app.core.errors import (
 )
 from app.core.ids import new_order_id, new_payment_id
 from app.domain.enums import OrderStatus, PaymentMethod, PaymentStatus
-from app.domain.order_state import CUSTOMER_CANCELLABLE, RELEASES_STOCK, assert_transition
+from app.domain.order_state import (
+    CANCEL_OR_REFUND_TARGETS,
+    CUSTOMER_CANCELLABLE,
+    assert_transition,
+    releases_stock,
+)
 from app.payments.base import PaymentProvider, WebhookEvent
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
+from app.repositories.support import SupportRepository
 from app.repositories.users import UserRepository
 from app.schemas.auth import Address
 from app.schemas.catalog import Variant
@@ -91,16 +97,22 @@ class OrderService:
         *,
         users: UserRepository | None = None,
         push: PushService | None = None,
+        support: SupportRepository | None = None,
     ) -> None:
         self.products = products
         self.orders = orders
         self.idempotency = idempotency
         self.payments = payments
-        # Both optional, both default None: see get_order_service in deps.py
+        # All optional, all default None: see get_order_service in deps.py
         # for why (the background housekeeping sweeper builds this class
-        # directly, without either).
+        # directly and may not wire every one of them).
         self.users = users
         self.push = push
+        # AAD-PAY-005: the ticket an amount-mismatch webhook opens. A plain
+        # local insert (session.add + flush), not a gateway call, so — unlike
+        # the refund itself — it's safe to do inline, in the same request/
+        # sweep transaction as everything else in apply_webhook.
+        self.support = support
 
     # ---------- notifications ----------
     # Best-effort side effects on top of the state changes above — never
@@ -412,15 +424,56 @@ class OrderService:
 
         if event.is_capture:
             if event.amount_paise is not None and event.amount_paise != order["total_paise"]:
-                # An amount mismatch is never routine. Do not confirm; alert.
+                payment_status = (order.get("payment") or {}).get("status")
+                if payment_status in (
+                    PaymentStatus.AMOUNT_MISMATCH.value,
+                    PaymentStatus.REFUNDED.value,
+                ):
+                    # Already flagged (or already refunded by the sweep) by
+                    # an earlier delivery of this same event — most likely
+                    # `release_expired_holds` re-polling before a human has
+                    # gotten to the ticket this already raised. Nothing new
+                    # to do, and re-flagging would re-queue a refund against
+                    # a payment that may already be refunded.
+                    log.info(
+                        "duplicate amount-mismatch event ignored",
+                        extra={"order": order_id},
+                    )
+                    return
+                # AAD-PAY-005: refusing to confirm is right, but a log line
+                # alone leaves the money stranded — it's already captured at
+                # the gateway, against a payment row that still says
+                # CREATED, so `_maybe_refund` never picks it up. Flag it
+                # (queues the refund for the sweep, since a gateway call
+                # doesn't belong in this transaction — AAD-PAY-003) and open
+                # a ticket so a human sees it: a mismatch is either a
+                # gateway bug or an attack, and both need one.
+                await self.orders.flag_amount_mismatch(
+                    order_id,
+                    provider_payment_id=event.provider_payment_id or "",
+                    received_amount_paise=event.amount_paise,
+                )
                 log.error(
-                    "webhook amount mismatch",
+                    "webhook amount mismatch — refund queued, ticket opened",
                     extra={
                         "order": order_id,
                         "expected": order["total_paise"],
                         "received": event.amount_paise,
                     },
                 )
+                if self.support:
+                    await self.support.create(
+                        user_id=order["user_id"],
+                        message=(
+                            f"Automated: payment for order {order['order_number']} "
+                            f"captured {event.amount_paise} paise, expected "
+                            f"{order['total_paise']} paise. A refund of the "
+                            "received amount has been queued automatically — "
+                            "please confirm it completes and decide what, if "
+                            "anything, the order itself needs."
+                        ),
+                        context_node_id="payment_amount_mismatch",
+                    )
                 return
             await self.orders.set_payment_status(
                 order_id, PaymentStatus.CAPTURED,
@@ -478,8 +531,66 @@ class OrderService:
             return
 
         if event.is_refund:
+            # AAD-PAY-002: a refund issued straight from the gateway
+            # dashboard (outside our own cancel flow) used to just flip the
+            # payment status and stop — the order itself stayed CONFIRMED/
+            # PACKED/OUT_FOR_DELIVERY/DELIVERED, so the goods still went
+            # out (or had already gone out) for an order the customer was
+            # never going to pay for.
+            if current in CANCEL_OR_REFUND_TARGETS:
+                # Already CANCELLED or REFUNDED — a replay of this event, or
+                # a refund that arrived after some other path (our own
+                # cancel/refund flow) already got here first. Nothing to do.
+                log.info(
+                    "refund event on an already-cancelled/refunded order ignored",
+                    extra={"order": order_id},
+                )
+                return
+
+            payment = order.get("payment") or {}
+            if payment.get("status") != PaymentStatus.CAPTURED.value:
+                # Nothing was ever captured (most likely still
+                # PENDING_PAYMENT) — there is no route to REFUNDED for this
+                # (see order_state.py) and nothing on our side was charged,
+                # so a refund event here can't be acted on automatically.
+                log.warning(
+                    "refund webhook for an order with no captured payment",
+                    extra={"order": order_id, "status": current.value},
+                )
+                return
+
+            total = order["total_paise"]
+            if event.amount_paise is None or event.amount_paise != total:
+                # A partial (or amount-unknown) refund must never
+                # auto-cancel the order — the customer keeps the goods and
+                # any remaining balance is still owed, so this needs a
+                # human, not an automatic state change.
+                log.error(
+                    "partial or amount-unknown refund received — order left "
+                    "as is, needs manual review",
+                    extra={
+                        "order": order_id,
+                        "status": current.value,
+                        "refunded_amount": event.amount_paise,
+                        "order_total": total,
+                    },
+                )
+                return
+
+            # A full refund from the gateway. Mark the payment refunded up
+            # front so `_cancel`'s `_maybe_refund` (AAD-PAY-003) sees a
+            # payment that is no longer CAPTURED and does not queue a
+            # second, redundant refund call against a payment the gateway
+            # has already refunded.
             await self.orders.set_payment_status(order_id, PaymentStatus.REFUNDED)
-            log.info("refund recorded", extra={"order": order_id})
+            refreshed = await self.orders.get(order_id)
+            if refreshed is not None:
+                await self._cancel(
+                    refreshed,
+                    note="Refunded via the payment gateway",
+                    actor="payment_gateway",
+                    target_status=OrderStatus.REFUNDED,
+                )
 
     # ---------- lifecycle ----------
 
@@ -508,7 +619,7 @@ class OrderService:
         current = OrderStatus(order["status"])
         assert_transition(current, new_status)
 
-        if new_status in RELEASES_STOCK:
+        if new_status in CANCEL_OR_REFUND_TARGETS:
             updated = await self._cancel(
                 order, note=note, actor=actor, target_status=new_status
             )
@@ -553,16 +664,30 @@ class OrderService:
                 raise NotFound("We could not find that order.")
             return latest
 
-        # Return inventory exactly once, whatever combination of cancel and
-        # refund paths ran.
+        # Resolve the stock outcome exactly once, whatever combination of
+        # cancel and refund paths ran (`mark_stock_released` guards this
+        # regardless of which of the two branches below actually runs).
         if await self.orders.mark_stock_released(order_id):
-            for line in order["lines"]:
-                await self.products.release_stock(line["sku"], line["qty"])
-                await self.products.record_stock_movement(
-                    sku=line["sku"], delta=line["qty"],
-                    reason=f"order_{target_status.value}",
-                    order_id=order_id, actor=actor,
-                )
+            if releases_stock(current, target_status):
+                for line in order["lines"]:
+                    await self.products.release_stock(line["sku"], line["qty"])
+                    await self.products.record_stock_movement(
+                        sku=line["sku"], delta=line["qty"],
+                        reason=f"order_{target_status.value}",
+                        order_id=order_id, actor=actor,
+                    )
+            else:
+                # AAD-PAY-004: the goods already left the building
+                # (OUT_FOR_DELIVERY or DELIVERED) — this is a write-off,
+                # not a restock. No stock_qty change, but still a ledger
+                # entry (delta=0) so the loss is visible for a human to
+                # reconcile, rather than just vanishing.
+                for line in order["lines"]:
+                    await self.products.record_stock_movement(
+                        sku=line["sku"], delta=0,
+                        reason=f"order_{target_status.value}_write_off",
+                        order_id=order_id, actor=actor,
+                    )
 
         # The CAS above only ever lets one caller past it for a given order
         # (a concurrent second cancel/refund gets `updated = None` above and
@@ -577,8 +702,22 @@ class OrderService:
         return updated
 
     async def _maybe_refund(self, order: dict[str, Any], *, target_status: OrderStatus) -> bool:
-        """Refund a captured online payment when its order is cancelled or
-        force-refunded.
+        """Queue a refund for a captured online payment when its order is
+        cancelled or force-refunded (AAD-PAY-003).
+
+        This used to call the gateway right here — inside the same request
+        transaction that just transitioned the order and released stock,
+        holding write locks on your hottest inventory rows for the full
+        HTTPS round trip to Razorpay, and with any exception other than
+        `UpstreamError` rolling back a refund that may have already
+        succeeded at the gateway. It no longer touches the network at all:
+        it only flags the payment `refund_pending` (a plain DB write, same
+        transaction, no round trip) and returns. `process_pending_refunds`,
+        run by the periodic sweeper (`app/main.py`) — the same place
+        `release_expired_holds` already makes its own gateway calls outside
+        any customer-facing request — is what actually calls
+        `payments.refund` and marks the payment `refunded`, with its own
+        retry on the next sweep if the gateway is unreachable.
 
         Cash-on-delivery orders never reach here with anything to refund —
         nothing was ever charged. An online order that never got past
@@ -591,31 +730,109 @@ class OrderService:
         if payment.get("status") != PaymentStatus.CAPTURED.value:
             return False
 
-        provider_payment_id = payment.get("provider_payment_id")
-        if not provider_payment_id:
+        if not payment.get("provider_payment_id"):
             log.error(
                 "captured payment has no provider_payment_id on file; cannot refund",
                 extra={"order": order["id"]},
             )
             return False
 
-        try:
-            await self.payments.refund(
-                provider_payment_id=provider_payment_id,
-                amount_paise=payment["amount_paise"],
-                notes={"order_id": order["id"], "reason": target_status.value},
-            )
-        except UpstreamError:
-            # The cancel itself already went through — stock is released and
-            # the order is cancelled either way. A refund that fails here
-            # needs a human to retry it against the gateway directly; it
-            # should never block or unwind the cancel that already happened.
-            log.exception("refund failed while cancelling order", extra={"order": order["id"]})
-            return False
-
-        await self.orders.set_payment_status(order["id"], PaymentStatus.REFUNDED)
-        log.info("refund issued on cancel", extra={"order": order["id"]})
+        await self.orders.set_payment_status(order["id"], PaymentStatus.REFUND_PENDING)
+        log.info(
+            "refund queued for the next sweep",
+            extra={"order": order["id"], "target_status": target_status.value},
+        )
         return True
+
+    async def process_pending_refunds(self, *, limit: int = 50) -> int:
+        """Actually call the gateway for refunds `_maybe_refund` queued
+        (AAD-PAY-003). Runs from the periodic sweeper, never from a
+        customer-facing request — a slow or hung Razorpay round trip here
+        costs sweep latency, not an inventory lock, a request worker, or a
+        customer waiting on it.
+
+        Each order is refunded independently, and a failure here is caught
+        broadly — not just `UpstreamError` — because this runs inside the
+        sweeper's own shared transaction (`session_scope`, same as
+        `release_expired_holds`): an exception this function lets escape
+        would roll back every write the whole sweep iteration made,
+        including other orders' refunds that already succeeded in the same
+        pass. Whatever goes wrong, the payment simply stays `refund_pending`
+        and is retried on the next sweep instead of being lost.
+        """
+        pending = await self.orders.find_pending_refunds(limit=limit)
+        refunded = 0
+        for order in pending:
+            payment = order["payment"] or {}
+            provider_payment_id = payment.get("provider_payment_id")
+            if not provider_payment_id:
+                log.error(
+                    "payment stuck refund_pending with no provider_payment_id on file",
+                    extra={"order": order["id"]},
+                )
+                continue
+            try:
+                await self.payments.refund(
+                    provider_payment_id=provider_payment_id,
+                    amount_paise=payment["amount_paise"],
+                    notes={"order_id": order["id"], "reason": order["status"]},
+                )
+            except Exception:
+                log.exception(
+                    "refund attempt failed; left refund_pending for the next sweep",
+                    extra={"order": order["id"]},
+                )
+                continue
+            await self.orders.set_payment_status(order["id"], PaymentStatus.REFUNDED)
+            refunded += 1
+        if refunded:
+            log.info("pending refunds processed", extra={"count": refunded})
+        return refunded
+
+    async def process_amount_mismatches(self, *, limit: int = 50) -> int:
+        """Refund the amount a capture webhook actually reported when it
+        didn't match the order total (AAD-PAY-005). Same shape as
+        `process_pending_refunds` and for the same reason: the gateway call
+        happens from the sweeper, not the request that received the
+        webhook, and one order's failure is caught broadly so it can never
+        roll back another order's refund that already succeeded in the same
+        pass.
+
+        Refunds the amount actually captured (`received_amount_paise`), not
+        the order's expected total — the two are different by definition
+        here.
+        """
+        mismatched = await self.orders.find_amount_mismatches(limit=limit)
+        refunded = 0
+        for order in mismatched:
+            payment = order["payment"] or {}
+            provider_payment_id = payment.get("provider_payment_id")
+            received = payment.get("received_amount_paise")
+            if not provider_payment_id or received is None:
+                log.error(
+                    "payment stuck amount_mismatch with no provider_payment_id "
+                    "or received amount on file",
+                    extra={"order": order["id"]},
+                )
+                continue
+            try:
+                await self.payments.refund(
+                    provider_payment_id=provider_payment_id,
+                    amount_paise=received,
+                    notes={"order_id": order["id"], "reason": "amount_mismatch"},
+                )
+            except Exception:
+                log.exception(
+                    "amount-mismatch refund attempt failed; left flagged for "
+                    "the next sweep",
+                    extra={"order": order["id"]},
+                )
+                continue
+            await self.orders.set_payment_status(order["id"], PaymentStatus.REFUNDED)
+            refunded += 1
+        if refunded:
+            log.info("amount-mismatch refunds processed", extra={"count": refunded})
+        return refunded
 
     async def update_address(
         self, *, order_id: str, user_id: str, address: Address
@@ -722,6 +939,7 @@ class OrderService:
         if checkout_payload is not None:
             payment["checkout_payload"] = checkout_payload
         payment.pop("provider_payment_id", None)  # internal; not for the client
+        payment.pop("received_amount_paise", None)  # internal; not for the client
 
         status = OrderStatus(order["status"])
         return OrderView(

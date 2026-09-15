@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
@@ -33,7 +33,13 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     # Auth
-    jwt_secret: str = "change-me-in-every-environment"
+    # AAD-SEC-008: SecretStr, not str — pydantic's default __repr__ dumps
+    # every field verbatim, so anything that renders the settings object (a
+    # debugger, an errant `log.info("config: %s", settings)`, an exception
+    # whose frame locals get captured by an error reporter) used to write
+    # this signing key to that destination in plaintext. SecretStr renders
+    # as `**********` everywhere except `.get_secret_value()`.
+    jwt_secret: SecretStr = SecretStr("change-me-in-every-environment")
     jwt_algorithm: str = "HS256"
     access_token_ttl_min: int = 30
     # AAD-SEC-002: cut from 60 to 30 days, and — unlike before — this is now
@@ -50,9 +56,9 @@ class Settings(BaseSettings):
     google_web_client_id: str = ""
     google_android_client_id: str = ""
 
-    razorpay_key_id: str = ""
-    razorpay_key_secret: str = ""
-    razorpay_webhook_secret: str = ""
+    razorpay_key_id: str = ""  # not a secret — the public half of the API key pair
+    razorpay_key_secret: SecretStr = SecretStr("")  # AAD-SEC-008
+    razorpay_webhook_secret: SecretStr = SecretStr("")  # AAD-SEC-008
     # The app's own deep-link URL that Razorpay redirects the browser back to
     # once a Payment Link is paid. Matches the scheme in mobile/app.config.js.
     # Must be a real https:// URL — Razorpay's Payment Links API rejects a
@@ -109,7 +115,13 @@ class Settings(BaseSettings):
         if not self.is_production:
             return
         problems: list[str] = []
-        if self.jwt_secret == "change-me-in-every-environment" or len(self.jwt_secret) < 32:
+        # SecretStr defines __len__ (so `len(self.jwt_secret)` still works
+        # directly) but not __eq__ against a plain str, so the
+        # "still-the-default" comparison needs .get_secret_value().
+        if (
+            self.jwt_secret.get_secret_value() == "change-me-in-every-environment"
+            or len(self.jwt_secret) < 32
+        ):
             problems.append("JWT_SECRET must be unique and at least 32 characters")
         if self.payment_provider == "mock":
             problems.append("PAYMENT_PROVIDER must not be 'mock'")

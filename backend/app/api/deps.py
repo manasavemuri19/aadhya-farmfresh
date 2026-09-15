@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Forbidden, Unauthorized, ValidationError
 from app.core.logging import user_id_var
+from app.core.rate_limit import RateLimiter
 from app.core.security import decode_token
 from app.db.base import get_session_factory
 from app.domain.enums import Role, UserStatus
@@ -174,6 +175,15 @@ class Principal:
         return self.role == Role.DELIVERY_AGENT.value
 
 
+# AAD-SEC-004: the "global authenticated: 120/min per user" limit from the
+# fix lives here rather than as a `Depends` sprinkled across every
+# authenticated route — `current_user` already decodes the token on every
+# one of them, so this is the one place in the whole app that authenticated
+# traffic is guaranteed to pass through exactly once, with the real user id
+# already in hand and no second token decode needed to get it.
+_global_authenticated_limiter = RateLimiter(limit=120, seconds=60)
+
+
 async def current_user(
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
@@ -183,6 +193,7 @@ async def current_user(
     payload = decode_token(token, expected_type="access")
 
     principal = Principal(payload["sub"], payload.get("role", Role.CUSTOMER.value))
+    _global_authenticated_limiter.check(principal.user_id)
     user_id_var.set(principal.user_id)
     return principal
 

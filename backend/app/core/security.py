@@ -50,7 +50,9 @@ def _issue(subject: str, token_type: TokenType, ttl: timedelta, **claims: Any) -
         "exp": int((now + ttl).timestamp()),
         **claims,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm
+    )
 
 
 def issue_access_token(user_id: str, *, role: str = "customer") -> str:
@@ -69,7 +71,9 @@ def issue_refresh_token(user_id: str, *, jti: str) -> str:
 
 def decode_token(token: str, *, expected_type: TokenType) -> dict[str, Any]:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token, settings.jwt_secret.get_secret_value(), algorithms=[settings.jwt_algorithm]
+        )
     except jwt.ExpiredSignatureError as exc:
         raise Unauthorized("Your session has expired. Sign in again.") from exc
     except jwt.InvalidTokenError as exc:

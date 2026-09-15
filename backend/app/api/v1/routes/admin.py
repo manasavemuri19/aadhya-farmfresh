@@ -11,14 +11,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import StaffUser, get_order_repo, get_order_service, get_product_repo
+from app.api.deps import AdminUser, StaffUser, get_order_repo, get_order_service, get_product_repo
 from app.api.route import TransactionalRoute
-from app.core.errors import NotFound, ValidationError
+from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.domain.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
 from app.schemas.catalog import Product
-from app.schemas.order import AdjustStockRequest, OrderView, SetPriceRequest, UpdateOrderStatusRequest
+from app.schemas.order import (
+    AdjustStockRequest,
+    OrderView,
+    SetPriceRequest,
+    UpdateOrderStatusRequest,
+)
 from app.services.order_service import OrderService
 
 router = APIRouter(prefix="/admin", tags=["admin"], route_class=TransactionalRoute)
@@ -42,14 +47,36 @@ async def adjust_stock(
 
     `set_qty` is the morning routine ("we bottled 40 litres"). `delta_qty` is a
     correction ("two got broken"). Exactly one of the two, never both.
+
+    AAD-DATA-016 / AAD-DATA-015: `set_qty` requires `expected_qty` — the
+    value the staff screen was showing when it loaded — and the write is a
+    compare-and-swap on it. A screen that's gone stale (an order reserved
+    stock, or someone else already adjusted it, since it loaded) gets a 409
+    with the current value, instead of silently overwriting a real
+    reservation. Because the swap is guaranteed accurate when it succeeds,
+    the ledger delta computed from it is the real delta, not the absolute
+    value the ledger used to record verbatim.
     """
     if (body.set_qty is None) == (body.delta_qty is None):
         raise ValidationError("Send exactly one of set_qty or delta_qty.")
 
     if body.set_qty is not None:
-        if not await products.set_stock(body.sku, body.set_qty):
-            raise NotFound("No such SKU.")
-        delta = body.set_qty
+        if body.expected_qty is None:
+            raise ValidationError(
+                "expected_qty is required with set_qty — send the value "
+                "currently shown on screen."
+            )
+        ok, current = await products.set_stock(
+            body.sku, body.set_qty, expected_qty=body.expected_qty
+        )
+        if not ok:
+            if current is None:
+                raise NotFound("No such SKU.")
+            raise Conflict(
+                f"Stock changed to {current} since this screen loaded. "
+                "Refresh and try again."
+            )
+        delta = body.set_qty - body.expected_qty
         reason = f"{body.reason}:set"
     else:
         if not await products.adjust_stock(body.sku, body.delta_qty):
@@ -65,23 +92,39 @@ async def adjust_stock(
 
 @router.post("/price", response_model=dict)
 async def set_price(
-    body: SetPriceRequest, staff: StaffUser, products: Products
+    body: SetPriceRequest, admin: AdminUser, products: Products
 ) -> dict[str, object]:
-    """Direct price change by a staff member. No sanity-range guard here —
-    unlike the automated Google Sheet sync, this is a deliberate action by a
-    person looking at the screen, not an unattended process that could apply
-    a stray typo unseen."""
-    if not await products.set_price(body.sku, body.price_paise):
+    """Direct price change. AAD-SEC-025: owner-only — a comment in the
+    `Role` enum always reserved this ("owner: everything, including
+    refunds"), but every route here used to accept a plain staff account.
+
+    AAD-DATA-009: mrp_paise is optional — send it alongside price_paise to
+    also move the MRP (e.g. when raising a price past what's currently
+    stored); omit it to change price only.
+
+    AAD-API-006: a change past ±50% of the current price needs
+    confirm_large_change=true — see SetPriceRequest and set_price's own
+    docstring for why. AAD-DATA-017: every actual change is now recorded
+    (old value, new value, actor, timestamp) in catalog_audit.
+    """
+    if not await products.set_price(
+        body.sku, body.price_paise, body.mrp_paise,
+        confirm_large_change=body.confirm_large_change, actor=admin.user_id,
+    ):
         raise NotFound("No such SKU.")
-    return {"sku": body.sku, "price_paise": body.price_paise, "ok": True}
+    response: dict[str, object] = {"sku": body.sku, "price_paise": body.price_paise, "ok": True}
+    if body.mrp_paise is not None:
+        response["mrp_paise"] = body.mrp_paise
+    return response
 
 
 @router.post("/products/{sku}/availability", response_model=dict)
 async def set_availability(
     sku: str, active: bool, staff: StaffUser, products: Products
 ) -> dict[str, object]:
-    """The 'sold out for today' switch, without touching stock counts."""
-    if not await products.set_variant_active(sku, active):
+    """The 'sold out for today' switch, without touching stock counts.
+    AAD-DATA-017: the change is now recorded in catalog_audit."""
+    if not await products.set_variant_active(sku, active, actor=staff.user_id):
         raise NotFound("No such SKU.")
     return {"sku": sku, "is_active": active}
 
@@ -108,6 +151,16 @@ async def order_queue(
 async def update_order_status(
     order_id: str, body: UpdateOrderStatusRequest, staff: StaffUser, svc: Orders
 ) -> OrderView:
+    """AAD-SEC-025: staff drive every ordinary fulfilment transition — that's
+    the role. A transition into REFUNDED is different: it triggers a real
+    gateway refund call (`OrderService._maybe_refund`), which the `Role`
+    enum's own comment always reserved for the owner. `staff` here already
+    carries the caller's *freshly re-checked* role (StaffUser re-reads it
+    from the database, per AAD-SEC-002), so this is an in-handler check
+    rather than a second dependency — it doesn't need a second DB read.
+    """
+    if body.status is OrderStatus.REFUNDED and not staff.is_admin:
+        raise Forbidden("Refunding an order needs an owner account.")
     return await svc.update_status(
         order_id=order_id, new_status=body.status, note=body.note, actor=staff.user_id
     )

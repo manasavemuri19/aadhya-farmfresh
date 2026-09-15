@@ -13,10 +13,22 @@ class AppError(Exception):
     status_code: int = 400
     code: str = "bad_request"
 
-    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
+        # AAD-SEC-004: RateLimited is the one error that needs to hand the
+        # client something beyond the JSON body — Retry-After. Generic on
+        # AppError rather than special-cased in the exception handler, so
+        # any future error that needs a response header can use the same
+        # mechanism without another special case.
+        self.headers = headers or {}
 
     def to_payload(self) -> dict[str, Any]:
         body: dict[str, Any] = {"code": self.code, "message": self.message}

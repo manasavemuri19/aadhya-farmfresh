@@ -28,6 +28,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.errors import UpstreamError
 from app.payments.razorpay import RazorpayProvider, _TimeoutSession
@@ -38,8 +39,8 @@ def provider(monkeypatch) -> RazorpayProvider:
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
-    monkeypatch.setattr(settings, "razorpay_key_secret", "fake-test-secret")
-    monkeypatch.setattr(settings, "razorpay_webhook_secret", "fake-webhook-secret")
+    monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr("fake-test-secret"))
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr("fake-webhook-secret"))
     return RazorpayProvider()
 
 

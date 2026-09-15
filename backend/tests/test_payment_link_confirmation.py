@@ -16,6 +16,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select, update
 
 from app.db.models import Order as OrderRow
@@ -53,8 +54,8 @@ def provider(monkeypatch) -> RazorpayProvider:
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
-    monkeypatch.setattr(settings, "razorpay_key_secret", FAKE_KEY_SECRET)
-    monkeypatch.setattr(settings, "razorpay_webhook_secret", FAKE_WEBHOOK_SECRET)
+    monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr(FAKE_KEY_SECRET))
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr(FAKE_WEBHOOK_SECRET))
     return RazorpayProvider()
 
 

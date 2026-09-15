@@ -35,6 +35,7 @@ import os
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 os.environ.setdefault(
@@ -84,8 +85,8 @@ def razorpay_provider(monkeypatch):
 
     monkeypatch.setattr(settings, "payment_provider", "razorpay")
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
-    monkeypatch.setattr(settings, "razorpay_key_secret", FAKE_KEY_SECRET)
-    monkeypatch.setattr(settings, "razorpay_webhook_secret", FAKE_WEBHOOK_SECRET)
+    monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr(FAKE_KEY_SECRET))
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr(FAKE_WEBHOOK_SECRET))
     get_payment_provider.cache_clear()
     yield
     get_payment_provider.cache_clear()

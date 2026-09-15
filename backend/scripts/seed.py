@@ -5,15 +5,25 @@ Stock is seeded at a plausible morning quantity so the app is usable straight
 after setup.
 
     python -m scripts.seed
+
+AAD-OPS-017: the retire step below permanently deletes any product not in
+PRODUCTS (cascading to its variants — live stock, prices, everything). This
+used to run with no ENV check, no confirmation and no dry-run — pointed at
+production, it deleted silently. It now refuses in production without
+--force, and prompts for confirmation on an interactive terminal otherwise.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import sys
+from collections.abc import Callable
 
 from sqlalchemy import delete, select
 
+from app.core.config import settings
 from app.core.ids import new_id
 from app.core.logging import configure_logging
 from app.db.base import connect, disconnect, session_scope
@@ -258,7 +268,47 @@ PRODUCTS = [
     ),
 ]
 
-async def main() -> None:
+def authorize_retirement(
+    retired: list[str],
+    *,
+    force: bool,
+    is_production: bool,
+    interactive: bool,
+    confirm_input: Callable[[], str] | None = None,
+) -> None:
+    """AAD-OPS-017. Raises SystemExit to refuse; returns normally to allow.
+
+    Production: always refused without --force, interactive or not — this
+    is the case that actually matters, and it must not depend on whether
+    someone happens to be watching a terminal. Non-production, interactive
+    (a human at a keyboard): prompted, unless --force was already given.
+    Non-production, non-interactive (CI, a cron reseed of a dev/staging
+    environment): proceeds unchanged from before this fix — blocking an
+    unattended dev pipeline here would trade one accident for a different
+    kind of outage.
+    """
+    if not retired:
+        return
+    if is_production and not force:
+        raise SystemExit(
+            f"Refusing to delete {len(retired)} product(s) in production "
+            f"without --force: {retired}. This is irreversible — order "
+            "lines snapshot the product, so past orders are unaffected, but "
+            "the live product, its variants, prices and stock counts are "
+            "gone. Re-run with --force only once you've confirmed this list "
+            "is correct."
+        )
+    if interactive and not force:
+        print(f"About to permanently delete {len(retired)} product(s): {retired}")
+        if confirm_input is not None:
+            answer = confirm_input()
+        else:
+            answer = input("Type 'delete' to confirm, anything else to abort: ")
+        if answer.strip() != "delete":
+            raise SystemExit("Aborted — no products were deleted.")
+
+
+async def main(*, force: bool = False) -> None:
     configure_logging("INFO")
     await connect()
 
@@ -294,13 +344,19 @@ async def main() -> None:
         existing = (await session.execute(select(ProductRow.slug))).scalars().all()
         retired = [slug for slug in existing if slug not in current_slugs]
         if retired:
+            authorize_retirement(
+                retired,
+                force=force,
+                is_production=settings.is_production,
+                interactive=sys.stdin.isatty(),
+            )
             await session.execute(delete(ProductRow).where(ProductRow.slug.in_(retired)))
             log.info("retired discontinued products", extra={"slugs": retired})
 
         for product in PRODUCTS:
             # `upsert_product` preserves live stock counts on an existing SKU,
             # so re-seeding a running shop never wipes the morning's numbers.
-            await repo.upsert_product(product)
+            await repo.upsert_product(product, actor="system", source="seed")
 
     variant_count = sum(len(p.variants) for p in PRODUCTS)
     log.info(
@@ -315,4 +371,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Skip the production guard and the confirmation prompt for retiring products.",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(force=args.force))

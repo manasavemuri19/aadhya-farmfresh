@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.deps import get_catalog_service
 from app.api.route import TransactionalRoute
+from app.core.rate_limit import IpRateLimiter
 from app.schemas.catalog import CatalogResponse, ProductView
 from app.services.catalog_service import CatalogService
 
@@ -13,8 +14,13 @@ router = APIRouter(prefix="/catalog", tags=["catalog"], route_class=Transactiona
 
 Catalog = Annotated[CatalogService, Depends(get_catalog_service)]
 
+# AAD-SEC-004: uncached (AAD-PERF-001), so every request is a database
+# query — the fix's own suggested limit, keyed on the trusted client IP
+# AAD-SEC-005 established.
+_catalog_per_minute = IpRateLimiter(limit=60, seconds=60)
 
-@router.get("", response_model=CatalogResponse)
+
+@router.get("", response_model=CatalogResponse, dependencies=[Depends(_catalog_per_minute)])
 async def get_catalog(
     svc: Catalog,
     response: Response,

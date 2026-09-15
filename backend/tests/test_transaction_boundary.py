@@ -139,13 +139,21 @@ def _order_body() -> dict:
     }
 
 
+def _headers(token: str, *, idempotency_key: str) -> dict:
+    # AAD-API-003: the header is required as of this fix — every real
+    # request this file makes needs one, distinct per attempt except where
+    # the test is deliberately reusing one (none here are).
+    return {"Authorization": f"Bearer {token}", "Idempotency-Key": idempotency_key}
+
+
 async def test_happy_path_order_is_really_persisted(live_server):
     base_url, user_id = live_server
     token = issue_access_token(user_id, role="customer")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
         resp = await client.post(
-            "/v1/orders", json=_order_body(), headers={"Authorization": f"Bearer {token}"}
+            "/v1/orders", json=_order_body(),
+            headers=_headers(token, idempotency_key="happy-path-key-001"),
         )
         assert resp.status_code == 201, resp.text
         order_id = resp.json()["id"]
@@ -195,7 +203,8 @@ async def test_forced_commit_failure_returns_5xx_not_200_and_writes_nothing(live
     try:
         async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
             resp = await client.post(
-                "/v1/orders", json=_order_body(), headers={"Authorization": f"Bearer {token}"}
+                "/v1/orders", json=_order_body(),
+                headers=_headers(token, idempotency_key="forced-failure-key-002"),
             )
             # The whole point of AAD-REL-001: this must NEVER be a 200/201
             # with a made-up order id for a write that didn't happen.
@@ -227,6 +236,7 @@ async def test_forced_commit_failure_returns_5xx_not_200_and_writes_nothing(live
     # session left open blocking the pool), still places an order normally.
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
         resp = await client.post(
-            "/v1/orders", json=_order_body(), headers={"Authorization": f"Bearer {token}"}
+            "/v1/orders", json=_order_body(),
+            headers=_headers(token, idempotency_key="post-failure-key-003"),
         )
         assert resp.status_code == 201, resp.text

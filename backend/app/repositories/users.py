@@ -3,15 +3,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.errors import Conflict
 from app.core.ids import new_user_id
 from app.db.models import Address as AddressRow
 from app.db.models import User as UserRow
 from app.domain.enums import Role
+
+# AAD-SEC-010: "10 is generous" per the audit's own suggestion — plenty for
+# home/work/a couple of relatives' addresses, nowhere near enough to matter
+# for the eager `selectin` load on every user read.
+MAX_ADDRESSES_PER_USER = 10
 
 
 def _to_dict(user: UserRow) -> dict[str, Any]:
@@ -137,16 +143,52 @@ class UserRepository:
         await self.session.flush()
 
     async def upsert_address(self, user_id: str, address: dict[str, Any]) -> None:
-        """Replace the address with the same label, otherwise add it."""
-        stmt = select(AddressRow).where(
+        """Replace the address with the same label, otherwise add it.
+
+        AAD-SEC-010: previously a check-then-act (SELECT, then conditionally
+        INSERT) — safe from duplicate rows thanks to the `uq_address_user_label`
+        constraint, but the losing side of a concurrent save of the *same*
+        label got an unhandled `IntegrityError`, a 500 to the customer. Now
+        a single atomic `INSERT ... ON CONFLICT (user_id, label) DO UPDATE`:
+        there is no losing side, because both statements just resolve to the
+        same final row.
+
+        A *new* label is capped at MAX_ADDRESSES_PER_USER per account —
+        updating an existing label never counts against the cap, since it
+        doesn't add a row. The count-then-insert check below is not
+        perfectly race-proof against two concurrent *new* labels both
+        landing right at the cap (this is an anti-abuse limit, not a
+        correctness invariant the way the unique constraint is — the
+        storage- and read-amplification abuse this closes is a script
+        creating rows far faster than any real concurrent-request race would
+        ever hit it), and it stays cheap: one extra indexed count query, only
+        on the new-label path.
+        """
+        existing_stmt = select(AddressRow.id).where(
             AddressRow.user_id == user_id, AddressRow.label == address["label"]
         )
-        row = (await self.session.execute(stmt)).scalars().first()
-        if row is None:
-            self.session.add(AddressRow(user_id=user_id, **address))
-        else:
-            for field, value in address.items():
-                setattr(row, field, value)
+        existing_id = (await self.session.execute(existing_stmt)).scalars().first()
+
+        if existing_id is None:
+            count_stmt = select(func.count()).select_from(AddressRow).where(
+                AddressRow.user_id == user_id
+            )
+            current_count = (await self.session.execute(count_stmt)).scalar_one()
+            if current_count >= MAX_ADDRESSES_PER_USER:
+                raise Conflict(
+                    f"You can save up to {MAX_ADDRESSES_PER_USER} addresses. "
+                    "Remove one before adding another."
+                )
+
+        stmt = (
+            insert(AddressRow)
+            .values(user_id=user_id, **address)
+            .on_conflict_do_update(
+                index_elements=[AddressRow.user_id, AddressRow.label],
+                set_=address,
+            )
+        )
+        await self.session.execute(stmt)
         await self.session.flush()
 
     # ---------- delivery agent location ----------

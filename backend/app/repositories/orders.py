@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -13,6 +13,14 @@ from sqlalchemy.orm import selectinload
 from app.db.models import Order as OrderRow
 from app.db.models import OrderEvent, OrderLine, OrderNumberCounter, Payment, WebhookEvent
 from app.domain.enums import OrderStatus, PaymentStatus
+
+# AAD-DATA-011: 60 days — long enough to cover any realistic post-incident
+# investigation window (a chargeback dispute, a "the app charged me twice"
+# support ticket), short enough that this doesn't become an unbounded,
+# unretained store of payment data under the DPDP Act 2023. Deliberately in
+# the middle of the fix's own suggested 30-90 day range; revisit if the farm
+# settles on a different investigation SLA.
+WEBHOOK_PAYLOAD_RETENTION = timedelta(days=60)
 
 
 def _to_dict(row: OrderRow) -> dict[str, Any]:
@@ -60,6 +68,7 @@ def _to_dict(row: OrderRow) -> dict[str, Any]:
             "provider_order_id": row.payment.provider_order_id,
             "provider_payment_id": row.payment.provider_payment_id,
             "checkout_payload": row.payment.checkout_payload,
+            "received_amount_paise": row.payment.received_amount_paise,
         }
         if row.payment
         else None,
@@ -259,6 +268,36 @@ class OrderRepository:
             update(Payment).where(Payment.order_id == order_id).values(**values)
         )
 
+    async def flag_amount_mismatch(
+        self, order_id: str, *, provider_payment_id: str, received_amount_paise: int
+    ) -> None:
+        """AAD-PAY-005: record that the gateway captured a different amount
+        than the order total. `received_amount_paise` is what the sweep in
+        `process_amount_mismatches` refunds — the actual amount taken, not
+        `amount_paise` (the order total we expected).
+
+        Also clears `hold_expires_at`: the order this payment belongs to is
+        (in the reachable case) still PENDING_PAYMENT, and leaving its hold
+        in place would put it right back in front of `release_expired_holds`
+        every sweep — which polls the gateway, gets the same mismatched
+        amount again, and would re-flag and re-ticket this order forever.
+        Clearing it takes the order out of that sweep for good; it now waits
+        on the ticket this flag raised, same as any other case that needs a
+        human rather than a timer.
+        """
+        await self.session.execute(
+            update(Payment)
+            .where(Payment.order_id == order_id)
+            .values(
+                status=PaymentStatus.AMOUNT_MISMATCH.value,
+                provider_payment_id=provider_payment_id,
+                received_amount_paise=received_amount_paise,
+            )
+        )
+        await self.session.execute(
+            update(OrderRow).where(OrderRow.id == order_id).values(hold_expires_at=None)
+        )
+
     async def update_address(
         self,
         order_id: str,
@@ -313,6 +352,31 @@ class OrderRepository:
         rows = (await self.session.execute(stmt)).scalars().unique().all()
         return [_to_dict(r) for r in rows]
 
+    async def find_amount_mismatches(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Orders `flag_amount_mismatch` flagged, still waiting on the
+        sweep's refund call (AAD-PAY-005)."""
+        stmt = (
+            _loaded(select(OrderRow))
+            .join(Payment, Payment.order_id == OrderRow.id)
+            .where(Payment.status == PaymentStatus.AMOUNT_MISMATCH.value)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).scalars().unique().all()
+        return [_to_dict(r) for r in rows]
+
+    async def find_pending_refunds(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Orders whose cancel/force-refund already committed but whose
+        gateway refund call hasn't happened yet (AAD-PAY-003) — picked up by
+        the periodic sweeper, never by a customer-facing request."""
+        stmt = (
+            _loaded(select(OrderRow))
+            .join(Payment, Payment.order_id == OrderRow.id)
+            .where(Payment.status == PaymentStatus.REFUND_PENDING.value)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).scalars().unique().all()
+        return [_to_dict(r) for r in rows]
+
     # ---------- webhook replay protection ----------
 
     async def record_webhook_once(
@@ -326,3 +390,22 @@ class OrderRepository:
         )
         await self.session.flush()
         return result.rowcount == 1
+
+    async def redact_expired_webhook_payloads(self) -> int:
+        """AAD-DATA-011: clears `payload` on rows past retention; the
+        `(provider, event_id)` row itself — and its replay-guard unique
+        constraint — is kept forever, since it's small and it's the whole
+        point of this table. Only the raw gateway payload, which carries
+        payment identifiers, amounts and payer contact details, is dropped.
+
+        The `payload != '{}'` guard means an already-redacted row is never
+        rewritten on a later sweep — same idea as WHERE-guarding any other
+        idempotent cleanup.
+        """
+        cutoff = datetime.now(UTC) - WEBHOOK_PAYLOAD_RETENTION
+        result = await self.session.execute(
+            update(WebhookEvent)
+            .where(WebhookEvent.received_at < cutoff, WebhookEvent.payload != {})
+            .values(payload={})
+        )
+        return result.rowcount or 0

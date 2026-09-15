@@ -14,7 +14,6 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 
-from app.core.errors import UpstreamError
 from app.db.models import Order as OrderRow
 from app.db.models import Variant as VariantRow
 from app.domain.enums import OrderStatus, PaymentStatus
@@ -84,30 +83,33 @@ async def test_late_capture_on_cancelled_order_refunds_automatically(
 
     updated = await orders.get(order.id)
     assert updated["status"] == OrderStatus.REFUNDED.value
-    assert updated["payment"]["status"] == PaymentStatus.REFUNDED.value
+    # AAD-PAY-003: the gateway call is no longer made inline here — it's
+    # queued for the sweeper, so the payment is refund_pending immediately
+    # after the webhook, not yet refunded. See
+    # test_pending_refund_sweep.py for the sweep actually completing it.
+    assert updated["payment"]["status"] == PaymentStatus.REFUND_PENDING.value
     # Stock must not be credited a second time for the same order.
     assert await stock_of(products, "MILK-COW-1L") == 5
     refund_events = [e for e in updated["timeline"] if e["status"] == OrderStatus.REFUNDED.value]
     assert len(refund_events) == 1
 
 
-async def test_late_capture_refund_failure_still_leaves_the_order_refunded(
+async def test_late_capture_queues_a_refund_rather_than_calling_the_gateway_inline(
     order_service, session, user, orders, products, milk, monkeypatch
 ):
-    """A gateway failure on the automatic refund must not be swallowed or
-    crash the webhook handler — this mirrors the existing `_maybe_refund`
-    contract used by every other cancel-with-refund path in this codebase.
-    The order still moves to REFUNDED (the correctness fact "this order is
-    over" is not in doubt); the payment stays CAPTURED because the refund
-    itself did not go through, which is exactly what should make this
-    visible to a human rather than silently correct."""
+    """AAD-PAY-003's whole point: this must never call the gateway from
+    inside the same transaction that just cancelled/refunded the order and
+    released its stock. If it did, this test's `payments.refund` stub —
+    which unconditionally raises — would blow up the webhook handler
+    itself; instead the handler must complete normally and simply leave the
+    payment queued for the sweeper."""
     order = await _place_and_cancel_via_sweep(order_service, session, user, milk)
     doc = await orders.get(order.id)
 
-    async def failing_refund(*, provider_payment_id, amount_paise, notes):
-        raise UpstreamError("gateway is down")
+    async def refund_must_not_be_called(*, provider_payment_id, amount_paise, notes):
+        raise AssertionError("_maybe_refund must not call the gateway inline (AAD-PAY-003)")
 
-    monkeypatch.setattr(order_service.payments, "refund", failing_refund)
+    monkeypatch.setattr(order_service.payments, "refund", refund_must_not_be_called)
 
     await order_service.apply_webhook(
         WebhookEvent(
@@ -122,7 +124,7 @@ async def test_late_capture_refund_failure_still_leaves_the_order_refunded(
 
     updated = await orders.get(order.id)
     assert updated["status"] == OrderStatus.REFUNDED.value
-    assert updated["payment"]["status"] == PaymentStatus.CAPTURED.value  # refund never landed
+    assert updated["payment"]["status"] == PaymentStatus.REFUND_PENDING.value
 
 
 async def test_duplicate_late_capture_after_refund_is_a_quiet_noop(

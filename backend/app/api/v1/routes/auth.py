@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, status
 
 from app.api.deps import CurrentUser, get_auth_service, get_user_repo
 from app.api.route import TransactionalRoute
+from app.core.rate_limit import IpRateLimiter
 from app.repositories.users import UserRepository
 from app.schemas.auth import (
     Address,
@@ -22,8 +23,18 @@ router = APIRouter(prefix="/auth", tags=["auth"], route_class=TransactionalRoute
 AuthSvc = Annotated[AuthService, Depends(get_auth_service)]
 Users = Annotated[UserRepository, Depends(get_user_repo)]
 
+# AAD-SEC-004: both unauthenticated and each triggers a database write (and,
+# for /google, a blocking-shaped outbound call before AAD-SEC-003's cache is
+# warm) — the fix's own suggested starting limits, keyed on the trusted
+# client IP AAD-SEC-005 established. Two independent windows on /google
+# (a tight per-minute one and a looser per-hour one) catch both a tight burst
+# and a slow, sustained drip the per-minute window alone wouldn't.
+_google_per_minute = IpRateLimiter(limit=10, seconds=60)
+_google_per_hour = IpRateLimiter(limit=30, seconds=3600)
+_refresh_per_minute = IpRateLimiter(limit=20, seconds=60)
 
-@router.post("/google")
+
+@router.post("/google", dependencies=[Depends(_google_per_minute), Depends(_google_per_hour)])
 async def google_sign_in(body: GoogleSignInRequest, svc: AuthSvc) -> dict:
     tokens, profile = await svc.verify_google_and_login(body.id_token)
     return {"tokens": tokens.model_dump(), "user": profile.model_dump()}
@@ -39,7 +50,7 @@ async def google_sign_in(body: GoogleSignInRequest, svc: AuthSvc) -> dict:
 # (this commit) if phone login is ever deliberately rebuilt.
 
 
-@router.post("/refresh", response_model=TokenPair)
+@router.post("/refresh", response_model=TokenPair, dependencies=[Depends(_refresh_per_minute)])
 async def refresh(body: RefreshRequest, svc: AuthSvc) -> TokenPair:
     return await svc.refresh(body.refresh_token)
 

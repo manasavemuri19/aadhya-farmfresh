@@ -58,6 +58,17 @@ class TimestampMixin:
 class User(Base, TimestampMixin):
     __tablename__ = "users"
 
+    __table_args__ = (
+        # AAD-DATA-010: the app treats `role` as a closed set (Role enum) —
+        # the database now refuses anything outside it too, so a typo from a
+        # manual psql fix or a future write path can never silently grant
+        # (or fail to recognise) a privileged role.
+        CheckConstraint(
+            "role IN ('customer', 'staff', 'admin', 'delivery_agent')",
+            name="ck_user_role_valid",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     # Nullable now: Google sign-in is the primary login path and does not
     # supply a phone number. Phone is still collected, separately, as a
@@ -69,7 +80,9 @@ class User(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     # Google's stable per-user identifier (the JWT `sub` claim). Unique
     # whenever present; null for any account that predates Google sign-in.
-    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    google_sub: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     name: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     role: Mapped[str] = mapped_column(String(16), default="customer", nullable=False)
@@ -163,9 +176,18 @@ class Variant(Base, TimestampMixin):
         # The database itself refuses to hold negative stock.
         CheckConstraint("stock_qty >= 0", name="ck_variant_stock_non_negative"),
         CheckConstraint("price_paise >= 0", name="ck_variant_price_non_negative"),
+        # AAD-DATA-009: was strict `>`, which made selling at list price (no
+        # active discount) a constraint violation. `>=` still rejects the
+        # nonsense case — an MRP below the selling price — while permitting
+        # a variant to simply not be discounted right now.
         CheckConstraint(
-            "mrp_paise IS NULL OR mrp_paise > price_paise",
+            "mrp_paise IS NULL OR mrp_paise >= price_paise",
             name="ck_variant_mrp_above_price",
+        ),
+        # AAD-DATA-010: `stock_policy` is a closed set (StockPolicy enum).
+        CheckConstraint(
+            "stock_policy IN ('tracked', 'made_to_order')",
+            name="ck_variant_stock_policy_valid",
         ),
         Index("ix_variant_product", "product_id"),
     )
@@ -198,6 +220,15 @@ class Order(Base, TimestampMixin):
         Index("ix_order_status_created", "status", "created_at"),
         Index("ix_order_delivery_agent", "delivery_agent_id"),
         CheckConstraint("total_paise >= 0", name="ck_order_total_non_negative"),
+        # AAD-DATA-010: `status` is a closed set (OrderStatus enum) — see the
+        # same constraint on `order_events.status` below, which uses the
+        # identical value list since every status here is also ever written
+        # there as part of the audit trail.
+        CheckConstraint(
+            "status IN ('pending_payment', 'confirmed', 'packed', "
+            "'out_for_delivery', 'delivered', 'cancelled', 'refunded')",
+            name="ck_order_status_valid",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -293,6 +324,14 @@ class OrderEvent(Base):
     """Append-only status history."""
 
     __tablename__ = "order_events"
+    __table_args__ = (
+        # AAD-DATA-010: same closed set and reasoning as `orders.status`.
+        CheckConstraint(
+            "status IN ('pending_payment', 'confirmed', 'packed', "
+            "'out_for_delivery', 'delivered', 'cancelled', 'refunded')",
+            name="ck_order_event_status_valid",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[str] = mapped_column(
@@ -312,6 +351,14 @@ class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
     __table_args__ = (
         Index("ix_payment_provider_order", "provider_order_id"),
+        # AAD-DATA-010: `method` and `status` are both closed sets
+        # (PaymentMethod and PaymentStatus enums).
+        CheckConstraint("method IN ('online', 'cod')", name="ck_payment_method_valid"),
+        CheckConstraint(
+            "status IN ('created', 'authorized', 'captured', 'failed', "
+            "'refunded', 'refund_pending', 'amount_mismatch')",
+            name="ck_payment_status_valid",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -350,6 +397,35 @@ class StockLedger(Base):
     reason: Mapped[str] = mapped_column(String(64), nullable=False)
     order_id: Mapped[str | None] = mapped_column(String(40), index=True)
     actor: Mapped[str] = mapped_column(String(40), default="system", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CatalogAudit(Base):
+    """AAD-DATA-017: one row per mutated commercial field. `stock_ledger`
+    above records quantity changes; this records everything else a staff
+    account or the bulk `upsert_product` path can change on a variant —
+    price, MRP, availability, stock policy, per-order cap — none of which
+    left any record at all before this. Old/new values are stored as text
+    rather than typed columns: the fields being audited are a mix of int,
+    bool and str, and this table's only job is "what changed, from what, to
+    what, by whom, when" — not to be queried structurally beyond that.
+    """
+
+    __tablename__ = "catalog_audit"
+    __table_args__ = (Index("ix_catalog_audit_sku_created", "sku", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sku: Mapped[str] = mapped_column(String(48), nullable=False)
+    field: Mapped[str] = mapped_column(String(32), nullable=False)
+    old_value: Mapped[str | None] = mapped_column(Text)
+    new_value: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(40), default="system", nullable=False)
+    # admin_api (a staff/admin action through the app), seed (scripts/seed.py),
+    # sheets_sync (not built yet, but named here per the fix's own suggestion
+    # so a future sync doesn't need a schema change to record its source).
+    source: Mapped[str] = mapped_column(String(16), default="admin_api", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

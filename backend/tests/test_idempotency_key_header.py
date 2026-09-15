@@ -130,7 +130,14 @@ async def test_well_formed_idempotency_key_is_unaffected(asgi_client):
     assert resp.status_code == 201, resp.text
 
 
-async def test_missing_idempotency_key_is_still_allowed(asgi_client):
-    """The header is optional — absence must not be confused with malformed."""
+async def test_missing_idempotency_key_is_rejected_as_422_not_401(asgi_client):
+    """AAD-API-003: the header is required, not optional — a missing key is
+    the same failure mode as a malformed one (a client bug that would
+    otherwise create a duplicate order on retry), so it gets the same 422
+    validation_error rather than a distinct error shape, and — just as with
+    a malformed key — must never come back as a 401. See this file's module
+    docstring for why a 401 specifically is the wrong failure here."""
     resp = await asgi_client.post("/v1/orders", json=_order_body())
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 422, resp.text
+    assert resp.status_code != 401
+    assert resp.json()["error"]["code"] == "validation_error"

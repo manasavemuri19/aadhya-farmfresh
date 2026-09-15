@@ -78,12 +78,16 @@ class RazorpayProvider(PaymentProvider):
     def __init__(self) -> None:
         if not (settings.razorpay_key_id and settings.razorpay_key_secret):
             raise RuntimeError("Razorpay credentials are not configured")
+        # AAD-SEC-008: razorpay_key_secret/razorpay_webhook_secret are
+        # SecretStr now — .get_secret_value() unwraps to the actual string
+        # only at the point of use, so nothing else in the process (a repr,
+        # a traceback, an accidental log) ever sees the plaintext value.
         self._client = razorpay.Client(
             session=_TimeoutSession(self._TIMEOUT_SECONDS),
-            auth=(settings.razorpay_key_id, settings.razorpay_key_secret),
+            auth=(settings.razorpay_key_id, settings.razorpay_key_secret.get_secret_value()),
         )
-        self._secret = settings.razorpay_key_secret.encode()
-        self._webhook_secret = settings.razorpay_webhook_secret.encode()
+        self._secret = settings.razorpay_key_secret.get_secret_value().encode()
+        self._webhook_secret = settings.razorpay_webhook_secret.get_secret_value().encode()
 
     async def create_order(
         self,

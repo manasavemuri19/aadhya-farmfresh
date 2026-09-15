@@ -13,6 +13,7 @@ still becomes `UpstreamError` exactly as before.
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 from razorpay.errors import BadRequestError, ServerError
 
 from app.core.errors import UpstreamError
@@ -24,8 +25,8 @@ def provider(monkeypatch) -> RazorpayProvider:
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
-    monkeypatch.setattr(settings, "razorpay_key_secret", "fake-test-secret")
-    monkeypatch.setattr(settings, "razorpay_webhook_secret", "fake-webhook-secret")
+    monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr("fake-test-secret"))
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr("fake-webhook-secret"))
     return RazorpayProvider()
 
 

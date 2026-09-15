@@ -39,4 +39,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # Railway and most PaaS inject $PORT. Default to 8000 for local runs.
 # Migrations run on boot. Alembic is idempotent — an already-migrated database
 # is a no-op — so this is safe on every deploy and every restart.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+#
+# AAD-SEC-005: this used to run with `--proxy-headers
+# --forwarded-allow-ips='*'`, which told uvicorn to trust X-Forwarded-For
+# from *any* source — a client that sent its own header controlled what
+# request.client.host became, a complete IP forgery, and a complete bypass
+# of the per-IP rate limiting AAD-SEC-004 added. Neither flag is here now:
+# uvicorn no longer rewrites request.client from proxy headers at all, and
+# app/core/client_ip.py resolves the real client IP itself from the
+# rightmost X-Forwarded-For hop — the one Railway's own single-hop proxy
+# appended, which a client cannot forge — rather than trusting a header
+# uvicorn was told to accept from anyone.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

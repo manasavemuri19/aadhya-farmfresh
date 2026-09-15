@@ -32,13 +32,15 @@ async def create_order(
     body: CreateOrderRequest,
     principal: CurrentUser,
     svc: Orders,
-    key: Annotated[str | None, Depends(idempotency_key)] = None,
+    key: Annotated[str, Depends(idempotency_key)],
 ) -> OrderView:
     """Place an order.
 
-    Send an `Idempotency-Key` header — a UUID generated once per checkout
-    attempt and kept across retries. Without it, a dropped response on a flaky
-    connection can produce a duplicate order.
+    Requires an `Idempotency-Key` header — a UUID generated once per
+    checkout attempt and kept across retries (AAD-API-003). Without one, a
+    dropped response on a flaky connection produces a duplicate order: a
+    second stock reservation, a second Razorpay order, and on the COD path
+    (which confirms instantly) a second dispatch to the same address.
     """
     return await svc.create_order(user_id=principal.user_id, request=body, idempotency_key=key)
 

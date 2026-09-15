@@ -11,7 +11,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.api.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import AppError
@@ -26,15 +30,17 @@ SWEEP_INTERVAL_SECONDS = 120
 async def _housekeeping(app: FastAPI) -> None:
     """Background maintenance.
 
-    Four jobs on one timer: reclaim stock held by abandoned checkouts,
+    Five jobs on one timer: reclaim stock held by abandoned checkouts,
     process any refunds queued against the gateway (AAD-PAY-003 — cancel and
     force-refund commit the order state change immediately but never call
     Razorpay inline, so this is where that call actually happens; AAD-PAY-005's
-    amount-mismatch refunds are the same deferred-gateway-call shape), and
-    delete expired idempotency keys and refresh-token rows (AAD-SEC-002 —
-    once a row's `expires_at` has passed it has no further purpose, not even
-    for reuse detection). Postgres has no TTL index, so that cleanup is
-    explicit rather than automatic.
+    amount-mismatch refunds are the same deferred-gateway-call shape), delete
+    expired idempotency keys and refresh-token rows (AAD-SEC-002 — once a
+    row's `expires_at` has passed it has no further purpose, not even for
+    reuse detection), and redact webhook payloads past retention
+    (AAD-DATA-011 — the `(provider, event_id)` dedupe row stays forever, only
+    the raw gateway payload is cleared). Postgres has no TTL index, so that
+    cleanup is explicit rather than automatic.
 
     A single in-process loop is right for one or two instances. If this ever
     runs on many replicas, move it behind an advisory lock or a scheduled job
@@ -65,6 +71,7 @@ async def _housekeeping(app: FastAPI) -> None:
                 await service.process_amount_mismatches()
                 await IdempotencyRepository(session).delete_expired()
                 await RefreshTokenRepository(session).delete_expired()
+                await service.orders.redact_expired_webhook_payloads()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -110,11 +117,19 @@ app.add_middleware(
     expose_headers=["X-Request-Id"],
     max_age=600,
 )
+# AAD-SEC-013: added last so it is the outermost middleware (Starlette wraps
+# in reverse registration order) — the body is rejected before CORS, request
+# context, or anything else touches it. Pure ASGI, not BaseHTTPMiddleware:
+# by the time a BaseHTTPMiddleware's dispatch() runs, Starlette may already
+# be consuming the body, so this wraps `receive` directly instead.
+app.add_middleware(BodySizeLimitMiddleware)
 
 
 @app.exception_handler(AppError)
 async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content=exc.to_payload())
+    return JSONResponse(
+        status_code=exc.status_code, content=exc.to_payload(), headers=exc.headers or None
+    )
 
 
 @app.exception_handler(RequestValidationError)
