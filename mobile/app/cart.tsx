@@ -35,7 +35,12 @@ export default function CartScreen() {
     if (!quote.data?.has_adjustments) return;
     for (const line of quote.data.lines) {
       if (line.adjusted_from_qty !== null || line.unavailable_reason) {
-        setQty(line.sku, line.qty, Math.max(line.qty, 1));
+        // AAD-QUAL-013: max_qty is the server's real, current ceiling for
+        // this SKU — using it here (not a placeholder derived from the
+        // already-clamped qty) is what lets the stepper below re-enable
+        // "+" up to that ceiling, instead of staying permanently capped at
+        // whatever qty this particular adjustment happened to land on.
+        setQty(line.sku, line.qty, Math.max(line.max_qty, 1));
       }
     }
   }, [quote.data, setQty]);
@@ -54,10 +59,7 @@ export default function CartScreen() {
   if (quote.isPending) return <Loading label="Checking today's prices" />;
   if (quote.isError) {
     return (
-      <ErrorState
-        message={quote.error instanceof Error ? quote.error.message : 'Try again.'}
-        onRetry={() => void quote.refetch()}
-      />
+      <ErrorState error={quote.error} onRetry={() => void quote.refetch()} />
     );
   }
 
@@ -83,9 +85,16 @@ export default function CartScreen() {
                     : 'No longer available'}
                 </Text>
               )}
+              {/* AAD-QUAL-013: a quantity clamp used to always read "only N
+                  left", even when stock was fine and the per-order limit
+                  was what actually bound — a customer who then tried to add
+                  more back saw the same reduced number every time, with no
+                  way to tell it was a limit rather than dwindling stock. */}
               {line.adjusted_from_qty !== null && !line.unavailable_reason && (
                 <Text style={styles.warning}>
-                  Only {line.qty} left — quantity updated
+                  {line.adjustment_reason === 'quantity_limit'
+                    ? `Limit ${line.max_qty} per order`
+                    : `Only ${line.qty} left — quantity updated`}
                 </Text>
               )}
             </View>
@@ -94,8 +103,8 @@ export default function CartScreen() {
               <Text variant="price">{formatPaise(line.line_total_paise)}</Text>
               <QtyStepper
                 qty={line.qty}
-                max={Math.max(line.qty, 1)}
-                onChange={(qty) => setQty(line.sku, qty, Math.max(line.qty, 1))}
+                max={Math.max(line.max_qty, 1)}
+                onChange={(qty) => setQty(line.sku, qty, Math.max(line.max_qty, 1))}
                 compact
               />
             </View>

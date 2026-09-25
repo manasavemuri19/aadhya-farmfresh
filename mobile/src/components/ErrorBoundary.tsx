@@ -34,11 +34,8 @@ export function AppErrorFallback({ error, retry }: { error: Error; retry: () => 
     reportCaughtError(error);
   }, [error]);
 
-  return (
-    <ErrorState
-      title="Something went wrong"
-      message="That screen ran into a problem. You can try again, or go back and come in a different way."
-      onRetry={() => void retry()}
-    />
-  );
+  // AAD-MOB-026: a caught render crash is never an ApiError, so
+  // describeError(error) always lands on its "something went wrong" bucket
+  // here — correct by construction, no special-casing needed.
+  return <ErrorState error={error} onRetry={() => void retry()} />;
 }

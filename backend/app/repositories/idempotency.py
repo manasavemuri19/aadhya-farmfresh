@@ -1,7 +1,23 @@
 """Idempotency keys for order creation.
 
-The unique constraint on (user_id, key) is the entire mechanism: the first
-insert wins, and a duplicate raises, which tells the caller this is a retry.
+AAD-QUAL-018: the previous docstring here said "a duplicate raises, which
+tells the caller this is a retry" — true of the unique constraint on
+(user_id, key), but not the actual safety mechanism for a *failed* attempt.
+What actually makes a failed attempt safe to retry with the same key is
+`TransactionalRoute` (`api/route.py`): every route that reaches this
+repository shares the request's one database transaction, and any exception
+— a business `AppError`, an unhandled bug — rolls that whole transaction
+back before a response is ever built. `claim()`'s insert is part of that
+same transaction, so a failed request's claim row is undone right along
+with everything else it did; the caller never sees a stale "in_progress"
+row blocking their retry. This is why a `release()` method that used to
+live here (deleting the in-progress row directly, for use on a failure
+path) had zero callers anywhere in the app: every failure path already gets
+this for free from the transaction boundary, and nothing here needs to ask
+for it explicitly. If a route is ever added that commits partial work and
+continues past a failed order attempt in the *same* request (nothing today
+does), that assumption would need re-checking before this claim can be
+trusted to disappear on its own.
 """
 
 from __future__ import annotations
@@ -63,16 +79,6 @@ class IdempotencyRepository:
             update(IdempotencyKey)
             .where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == key)
             .values(status="completed", response=response)
-        )
-
-    async def release(self, user_id: str, key: str) -> None:
-        """Drop an in-progress key after a failure so the customer can retry."""
-        await self.session.execute(
-            delete(IdempotencyKey).where(
-                IdempotencyKey.user_id == user_id,
-                IdempotencyKey.key == key,
-                IdempotencyKey.status == "in_progress",
-            )
         )
 
     async def delete_expired(self, *, batch_size: int = 500) -> int:

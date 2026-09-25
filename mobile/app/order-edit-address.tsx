@@ -17,10 +17,13 @@ import type { Address, OrderView } from '../src/api/types';
  * order screen with a plain `?orderId=` param, the same shape as the rest
  * of this app's one-off screens (edit-details, payment-callback).
  *
- * Editable only while the order is still can_edit_address (see
- * order_service.CUSTOMER_CANCELLABLE on the backend) — once it's packed for
- * pickup, the farm has already dispatched against the old address, so this
- * screen shows a blocked state instead of a form that would 403 on submit.
+ * Product decision: `can_edit_address` is now always false from the backend
+ * (see OrderService.update_address's own docstring) — a placed order's
+ * address can't be self-serve edited at all, at any status. The order
+ * screen's "Change address" link is gated on that flag too, so this screen
+ * is effectively unreachable in normal use; the blocked state below is kept
+ * as a defensive fallback (a stale deep link, an old cached screen) rather
+ * than assuming that link is the only way here.
  */
 export default function OrderEditAddressScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
@@ -64,14 +67,18 @@ export default function OrderEditAddressScreen() {
     setPrefilled(true);
   }, [order.data, prefilled]);
 
+  // AAD-MOB-018: 'located_no_address' means the GPS fix succeeded but the
+  // reverse-geocode step didn't — no `locationLine1` to fill in, but the
+  // coordinates are still real and worth keeping for a hand-typed address.
   const useCurrentLocation = () => {
-    if (locationStatus === 'found' && locationLine1) {
-      setLine1(locationLine1);
+    if (
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null
+    ) {
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
     } else {
       void requestLocation();
     }
@@ -119,21 +126,18 @@ export default function OrderEditAddressScreen() {
   if (order.isPending) return <Loading />;
   if (order.isError) {
     return (
-      <ErrorState
-        message={order.error instanceof Error ? order.error.message : 'Try again.'}
-        onRetry={() => void order.refetch()}
-      />
+      <ErrorState error={order.error} onRetry={() => void order.refetch()} />
     );
   }
 
   if (!order.data.can_edit_address) {
     return (
       <View style={styles.blocked}>
-        <Text variant="title">Too late to change this</Text>
+        <Text variant="title">Can't change this here</Text>
         <Text variant="body" style={styles.blockedBody}>
-          Order {order.data.order_number} is already on its way to being delivered, so the address
-          can no longer be changed here. Message us from Help & Support with the order number and
-          the correct address and we'll try to catch it.
+          The delivery address for order {order.data.order_number} can't be changed once it's
+          placed. Message us from Help & Support with the order number and the correct address
+          and we'll try to catch it.
         </Text>
         <Button label="Back to order" variant="secondary" onPress={() => router.back()} />
       </View>

@@ -19,7 +19,19 @@ let cachedRefresh: string | null | undefined;
 async function read(key: string): Promise<string | null> {
   try {
     return await SecureStore.getItemAsync(key);
-  } catch {
+  } catch (err) {
+    // AAD-MOB-008: `getItemAsync` already resolves to `null` for the
+    // ordinary "nothing stored under this key" case — it doesn't throw for
+    // that. Anything landing in this catch is SecureStore itself failing
+    // (a locked/unavailable keystore, a corrupted entry, an OS-level
+    // permission problem), which used to be swallowed and returned as the
+    // exact same `null` a logged-out user produces. That made a genuine
+    // keychain failure indistinguishable from "never signed in" all the way
+    // up through `getAccessToken`/`getRefreshToken` — the app would just
+    // sign someone out with nothing in the logs to explain why. Still
+    // returns `null` (there's no token to hand back either way, and callers
+    // shouldn't have to handle a third state), but now leaves a trail.
+    console.error(`[tokenStore] SecureStore read failed for "${key}":`, err);
     return null;
   }
 }

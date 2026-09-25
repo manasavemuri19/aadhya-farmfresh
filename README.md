@@ -141,8 +141,14 @@ picks it up directly.
    provider hands out, so paste it verbatim if you are using Supabase or Neon
    instead.
 2. Set the rest of the variables from `.env.example` in the dashboard.
-3. Migrations run on container start (`alembic upgrade head` in the Dockerfile
-   `CMD`). Alembic is idempotent, so this is safe on every deploy and restart.
+3. Migrations run as a gated Railway `preDeployCommand` (`railway.json`), once
+   per deploy, before the new image takes traffic — not from the container's
+   own start command any more. `alembic upgrade head` used to live in the
+   Dockerfile `CMD` and run on every boot, including concurrent replica
+   restarts; that raced two replicas against each other with no lock, so it
+   is gone from `CMD` (AAD-OPS-002). `alembic/env.py` also takes a Postgres
+   advisory lock around the migration itself, as a second layer in case
+   `alembic upgrade head` is ever invoked outside the gated path.
 
 The app refuses to boot in production with a default secret, the mock payment
 provider, or debug OTP echo still enabled.
@@ -247,6 +253,16 @@ rows. If the write then fails, the gateway order is orphaned and expires
 unpaid, which is a strictly better failure than reserved stock for an order
 that does not exist.
 
+The commit itself used to be a gap in this story: FastAPI runs a dependency's
+post-`yield` code (where this transaction's `commit()` originally lived)
+*after* the response is already built, so a commit failure had nowhere to
+go — the client got a `200` and the database got a rollback (AAD-REL-001,
+fixed). `TransactionalRoute` (`app/api/route.py`) now owns the commit
+instead, wrapping the entire request including dependency teardown, so a
+commit failure is a plain exception raised before any bytes reach the
+client and becomes a 5xx through the normal error handlers — never a false
+success.
+
 ### Duplicate orders
 
 Checkout sends an `Idempotency-Key`, generated once per attempt and stable
@@ -294,7 +310,12 @@ createdb aadhya_test
 ENV=test TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aadhya_test pytest -q
 ```
 
-68 tests. Covers pricing and delivery thresholds, every legal and illegal order
+<!-- AAD-QUAL-034: this used to say "68 tests" — stale the moment any PR adds
+one, and it already had (the suite is at several hundred and counting).
+Run the command above for the current count instead of trusting a number
+frozen in a doc. -->
+
+Covers pricing and delivery thresholds, every legal and illegal order
 transition, phone normalisation, stock reservation, idempotent checkout,
 webhook replay, amount-mismatch rejection, and cross-user access.
 
@@ -330,14 +351,30 @@ old receipt must show what the customer actually paid, not today's price.
 
 ## Known gaps
 
-- **Rate limiting** is per-phone for OTP only. Put a real limiter in front of
-  the API before launch.
+<!-- AAD-QUAL-034: this section had drifted well behind the code — it said
+push notifications, refund initiation and per-endpoint rate limiting
+"aren't built" when all three now are. Left uncorrected, it actively
+misinforms the next engineer into re-building something that already
+exists, or skipping a rate limit that's already there. Corrected below to
+match the current state of the codebase. -->
+
+- **Rate limiting** covers Google sign-in, token refresh, catalog browsing,
+  order quoting and support ticket submission (`app/core/rate_limit.py`,
+  wired per-route). Phone/OTP login itself was retired in favour of Google
+  sign-in, so there is no OTP endpoint left to rate-limit. Worth a fresh
+  pass before launch regardless — the per-route limits were each sized for
+  a specific abuse case, not audited as a whole.
 - **Full-text search** is `ILIKE`, which is fine for a catalog this size. Past
   a few hundred products, move to a `tsvector` column with a GIN index.
 - **Images** point at a placeholder CDN. Wire up S3/R2 or Cloudinary.
-- **Push notifications** are not built. FCM would go in `OrderService` at each
-  transition.
+- **Push notifications** are built (`app/services/push_service.py`, agent
+  location, order-status and new-order-request pushes, migration 0007).
+  What is still missing: a customer-facing notification preferences screen,
+  and delivery of a push to a device that's been offline long enough for
+  Expo's receipt to expire.
 - **The admin screens** exist as API endpoints, not UI. Decide whether that is
   a staff-role tab in this app or a small separate web page.
-- **Refunds** are recorded when the gateway reports them, but nothing initiates
-  one yet.
+- **Refunds** are initiated automatically by `OrderService._maybe_refund` on
+  cancellation/return and processed by `process_pending_refunds`; nothing
+  manual is required for the common paths. Still missing: a staff-initiated
+  partial or goodwill refund with no corresponding order-status trigger.

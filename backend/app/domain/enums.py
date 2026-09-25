@@ -62,3 +62,26 @@ class StockPolicy(StrEnum):
 
     TRACKED = "tracked"       # decremented per order; blocks when exhausted
     MADE_TO_ORDER = "made_to_order"  # always sellable within the daily cutoff
+
+
+class SettlementStatus(StrEnum):
+    """AAD-BIZ-004: the outcome of one cash-settlement attempt for one
+    delivery agent. `SETTLED` only when the amount an admin records as
+    actually received exactly matches the sum of that agent's unclaimed
+    `cod_collections` rows. Any difference is `DISCREPANCY` — recorded,
+    with a reason, never silently upgraded to `SETTLED` — see
+    `CashService.settle_agent`."""
+
+    SETTLED = "settled"
+    DISCREPANCY = "discrepancy"
+
+
+class SupportTicketStatus(StrEnum):
+    """AAD-BIZ-005: the mailbox had no status field at all — every ticket
+    was implicitly and permanently "unread". `OPEN` is the default on
+    creation; a staff account flips a ticket to `CLOSED` once it's handled.
+    No richer workflow (assignment, a reply thread) yet — see
+    `SupportTicket`'s own docstring."""
+
+    OPEN = "open"
+    CLOSED = "closed"

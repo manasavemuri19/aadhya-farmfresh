@@ -2,25 +2,52 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-from contextlib import asynccontextmanager, suppress
+# AAD-QUAL-007: `settings` and `configure_logging` are both leaf modules —
+# neither imports anything else of ours — so they can be resolved and
+# structured logging turned on before any of the imports below run. This
+# used to happen inside `lifespan()`, which only executes once uvicorn
+# actually starts serving: everything imported below (every route, service
+# and repository this app has) previously ran its *module-level* code, if
+# any ever logs during import, through Python's unstructured default
+# logging config instead. The remaining imports are genuinely below code
+# now, hence the noqa: E402s — that ordering is the fix, not an oversight.
+from app.core.config import settings
+from app.core.logging import configure_logging
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+configure_logging(settings.log_level)
 
-from app.api.middleware import (
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+from collections.abc import Awaitable, Callable  # noqa: E402
+from contextlib import asynccontextmanager, suppress  # noqa: E402
+
+from fastapi import FastAPI, Request  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+
+from app.api.middleware import (  # noqa: E402
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
-from app.api.v1.router import API_V1_PREFIX, api_router
-from app.core.config import settings
-from app.core.errors import AppError
-from app.core.logging import configure_logging
-from app.db import base as db
+from app.api.v1.router import API_V1_PREFIX, api_router  # noqa: E402
+from app.core.errors import AppError  # noqa: E402
+from app.core.outbox import defer_until_commit  # noqa: E402
+from app.db import base as db  # noqa: E402
+from app.db.base import session_scope  # noqa: E402
+from app.payments import get_payment_provider  # noqa: E402
+from app.repositories.idempotency import IdempotencyRepository  # noqa: E402
+from app.repositories.orders import OrderRepository  # noqa: E402
+from app.repositories.products import ProductRepository  # noqa: E402
+from app.repositories.push_tokens import PushTokenRepository  # noqa: E402
+from app.repositories.refresh_tokens import RefreshTokenRepository  # noqa: E402
+from app.repositories.support import SupportRepository  # noqa: E402
+from app.repositories.users import UserRepository  # noqa: E402
+from app.services.order_service import OrderService  # noqa: E402
+from app.services.push_service import PushService  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -44,26 +71,27 @@ async def _run_sweep_once() -> None:
     AAD-PAY-005's amount-mismatch refunds are the same deferred-gateway-call
     shape), delete expired idempotency keys and refresh-token rows
     (AAD-SEC-002 — once a row's `expires_at` has passed it has no further
-    purpose, not even for reuse detection), and redact webhook payloads past
+    purpose, not even for reuse detection), redact webhook payloads past
     retention (AAD-DATA-011 — the `(provider, event_id)` dedupe row stays
-    forever, only the raw gateway payload is cleared). Postgres has no TTL
-    index, so that cleanup is explicit rather than automatic.
+    forever, only the raw gateway payload is cleared), and prune push
+    tokens no device has touched in 90 days (AAD-SEC-032 — the other half
+    of that fix is `DELETE /notifications/token` at sign-out, which only
+    covers a customer who actually signs out; this covers the handset that
+    never does). Postgres has no TTL index, so that cleanup is explicit
+    rather than automatic. AAD-BIZ-003: also pushes staff/admin once a SKU
+    dips into its own low-stock band, debounced by `low_stock_notified` so
+    it fires once per dip rather than every 2 minutes it sits there.
 
     Split out from the loop in `_housekeeping` below so it can run
     immediately at startup as well as on the timer, and so a test can call
     it directly without needing to run (or cancel) an infinite loop.
+
+    AAD-QUAL-009: these were all function-local imports, which usually means
+    a circular dependency is being papered over. There isn't one here —
+    confirmed by moving every one of them to module level and importing
+    `app.main` cleanly — so they're hoisted to the top of the file with
+    everything else now.
     """
-    from sqlalchemy import text
-
-    from app.db.base import session_scope
-    from app.payments import get_payment_provider
-    from app.repositories.idempotency import IdempotencyRepository
-    from app.repositories.orders import OrderRepository
-    from app.repositories.products import ProductRepository
-    from app.repositories.refresh_tokens import RefreshTokenRepository
-    from app.repositories.support import SupportRepository
-    from app.services.order_service import OrderService
-
     async with session_scope() as session:
         got_lock = (
             await session.execute(
@@ -88,6 +116,9 @@ async def _run_sweep_once() -> None:
         keys_deleted = await IdempotencyRepository(session).delete_expired()
         tokens_deleted = await RefreshTokenRepository(session).delete_expired()
         payloads_redacted = await service.orders.redact_expired_webhook_payloads()
+        push_tokens_pruned = await PushTokenRepository(session).prune_stale()
+        low_stock_notified = await _notify_low_stock(session)
+        low_stock_rearmed = await service.products.clear_stale_low_stock_flags()
 
     # AAD-REL-003: there's no metrics system anywhere in this codebase to
     # emit an actual gauge to (confirmed — no prometheus_client or
@@ -105,12 +136,78 @@ async def _run_sweep_once() -> None:
             "idempotency_keys_deleted": keys_deleted,
             "refresh_tokens_deleted": tokens_deleted,
             "webhook_payloads_redacted": payloads_redacted,
+            "push_tokens_pruned": push_tokens_pruned,
+            "low_stock_notified": low_stock_notified,
+            "low_stock_rearmed": low_stock_rearmed,
         },
     )
 
 
-async def _housekeeping(app: FastAPI) -> None:
+async def _notify_low_stock(session: db.AsyncSession) -> int:
+    """AAD-BIZ-003: push every staff/admin account once per SKU each time it
+    dips into its own low-stock band. The threshold itself is per-variant
+    (`low_stock_threshold`, already in use for the in-app "low stock" badge
+    — this reuses that column rather than inventing a second one) and the
+    owner hasn't given us a value to change it to yet, so this notifies off
+    whatever each variant is already set to.
+
+    Deferred via `defer_until_commit` rather than awaited inline, same
+    reasoning as `SupportService._notify_staff` (AAD-BIZ-005) and
+    `OrderService`'s own push call sites (AAD-REL-004): `session_scope()`
+    wraps this whole sweep pass in an outbox batch, so the push only
+    actually fires once `mark_low_stock_notified` below has committed —
+    never before, and never for a dip a rollback would have undone.
+    """
+    products = ProductRepository(session)
+    newly_low = await products.find_newly_low_stock()
+    if not newly_low:
+        return 0
+
+    staff_ids = await UserRepository(session).list_staff_ids()
+    skus = [row["sku"] for row in newly_low]
+    if staff_ids:
+        push = PushService(PushTokenRepository(session))
+        for row in newly_low:
+            await defer_until_commit(
+                _low_stock_push_effect(
+                    push, staff_ids, sku=row["sku"], label=row["label"], stock_qty=row["stock_qty"]
+                )
+            )
+
+    await products.mark_low_stock_notified(skus)
+    return len(skus)
+
+
+def _low_stock_push_effect(
+    push: PushService, staff_ids: list[str], *, sku: str, label: str, stock_qty: int
+) -> Callable[[], Awaitable[None]]:
+    """A small factory rather than a lambda defined inline in the loop
+    above, for two reasons: it binds `sku`/`label`/`stock_qty` per call
+    (avoiding the classic late-binding-closure-in-a-loop bug a bare
+    `lambda: ...` referencing the loop variable would have), and mypy can
+    actually infer this nested function's type against `Effect` — a
+    default-argument lambda used for the same binding trick left it unable
+    to."""
+
+    async def _send() -> None:
+        await push.notify_users(
+            staff_ids,
+            title="Low stock",
+            body=f"{label} ({sku}) is down to {stock_qty} left — restock soon.",
+            data={"sku": sku},
+        )
+
+    return _send
+
+
+async def _housekeeping() -> None:
     """Runs `_run_sweep_once` on a timer for the life of the process.
+
+    AAD-QUAL-009: took an `app: FastAPI` parameter it never used — the sweep
+    itself opens its own session via `session_scope()` rather than anything
+    hung off `app.state`. Dropped; `lifespan` below still stashes the task
+    it returns on `app.state.sweeper` for its own shutdown handling, that
+    just no longer means this function needs a reference to `app` itself.
 
     AAD-REL-003: this used to `await asyncio.sleep(SWEEP_INTERVAL_SECONDS)`
     *before* the first sweep, so nothing was swept until 2 minutes after
@@ -132,11 +229,14 @@ async def _housekeeping(app: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging(settings.log_level)
+    # AAD-QUAL-007: `configure_logging()` used to be called here, which only
+    # ever ran once uvicorn's lifespan startup fired — after every module in
+    # this app had already finished importing. It's called once, at the top
+    # of this file, before those imports run, instead.
     log.info("starting api", extra={"env": settings.env})
 
     await db.connect()
-    app.state.sweeper = asyncio.create_task(_housekeeping(app))
+    app.state.sweeper = asyncio.create_task(_housekeeping())
 
     try:
         yield
@@ -150,7 +250,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Aadya Pickles & Dairy API",
-    version="1.0.0",
+    # AAD-QUAL-011: was hardcoded "1.0.0" — never changed, so it told you
+    # nothing about which build produced a given log line or `/` response,
+    # which is exactly what you want during a rollback. Settings.app_version
+    # picks up Railway's own injected git SHA with no deploy config needed;
+    # see its default_factory in app/core/config.py.
+    version=settings.app_version,
     lifespan=lifespan,
     # Interactive docs are useful in development and an information leak in prod.
     docs_url=None if settings.is_production else "/docs",
@@ -175,6 +280,15 @@ app.add_middleware(
 # by the time a BaseHTTPMiddleware's dispatch() runs, Starlette may already
 # be consuming the body, so this wraps `receive` directly instead.
 app.add_middleware(BodySizeLimitMiddleware)
+# AAD-SEC-017: no TrustedHostMiddleware existed at all — any Host header a
+# client sent was trusted. Added even later than BodySizeLimitMiddleware, so
+# it is the outermost of all of them: a forged Host is rejected with a plain
+# 400 before this app spends any work — counting body bytes included — on
+# the request at all. `settings.allowed_host_list` is empty-by-mistake-proof
+# by construction (`assert_deploy_safe` refuses a wildcard or a local/test
+# host in staging or production), so this can't silently degrade into an
+# allow-everything no-op the way an unvalidated allowlist could.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
 
 
 @app.exception_handler(AppError)
@@ -188,12 +302,18 @@ async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
 async def handle_validation_error(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    # AAD-QUAL-010: this path (FastAPI's own request-schema validation,
+    # before a route body even runs) is outside AppError.to_payload()
+    # entirely, so it needed the same request_id added separately here —
+    # otherwise the one error response a customer hits most often (a bad
+    # request body) was exactly the one still missing it.
     return JSONResponse(
         status_code=422,
         content={
             "error": {
                 "code": "validation_error",
                 "message": "Some of those details are not quite right.",
+                "request_id": getattr(request.state, "request_id", "-"),
                 "details": {"fields": exc.errors()},
             }
         },
@@ -220,6 +340,11 @@ async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 app.include_router(api_router, prefix=API_V1_PREFIX)
 
 
-@app.get("/", include_in_schema=False)
-async def root() -> dict[str, str]:
-    return {"service": "aadhya-api", "version": app.version}
+# AAD-SEC-019: used to return {"service": "aadhya-api", "version": app.version}
+# — free, unauthenticated reconnaissance for anyone who just hits the bare
+# domain. Nothing in this app (no infra healthcheck, no client) actually
+# reads this route; it exists only so a stray request to "/" gets a clean
+# response instead of a 404. A 204 does that with nothing to leak.
+@app.get("/", include_in_schema=False, status_code=204)
+async def root() -> None:
+    return None

@@ -41,6 +41,9 @@ def provider(monkeypatch) -> RazorpayProvider:
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
     monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr("fake-test-secret"))
     monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr("fake-webhook-secret"))
+    monkeypatch.setattr(
+        settings, "razorpay_callback_url", "https://example.test/v1/payments/link-redirect"
+    )
     return RazorpayProvider()
 
 

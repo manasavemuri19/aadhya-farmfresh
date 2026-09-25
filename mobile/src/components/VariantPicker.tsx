@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Pressable, ScrollView, StyleSheet } from 'react-native';
 import { Text } from './Text';
 import { color, font, radius, size, space } from '../theme/tokens';
@@ -9,7 +10,9 @@ interface Props {
   onSelect: (sku: string) => void;
 }
 
-export function VariantPicker({ variants, selectedSku, onSelect }: Props) {
+// AAD-MOB-014: same reasoning as QtyStepper — memoized so it doesn't force
+// a re-render every time its now-memoized ProductCard parent re-renders.
+export const VariantPicker = memo(function VariantPicker({ variants, selectedSku, onSelect }: Props) {
   return (
     <ScrollView
       horizontal
@@ -48,7 +51,7 @@ export function VariantPicker({ variants, selectedSku, onSelect }: Props) {
       })}
     </ScrollView>
   );
-}
+});
 
 const styles = StyleSheet.create({
   row: { gap: 6, paddingVertical: 2 },

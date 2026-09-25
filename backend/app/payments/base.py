@@ -89,6 +89,32 @@ class PaymentProvider(ABC):
         ...
 
     @abstractmethod
+    async def cancel_order(self, *, provider_order_id: str) -> None:
+        """Best-effort void of a gateway order that must never be paid.
+
+        AAD-PAY-016: `create_order` above is deliberately called before the
+        local write that reserves stock and persists the order (see
+        `OrderService`'s own module docstring) — a slow gateway must never
+        hold inventory locks. That ordering means a failure *after* the
+        gateway call but before the order is actually written (stock
+        disappeared, a DB error, a lost compare-and-swap on a retry) leaves
+        a real, live, payable gateway order with nothing behind it in this
+        app at all. This is the caller's cleanup for exactly that case —
+        called right after such a failure, before it's shown to the
+        customer.
+
+        Implementations must not raise: this runs from inside an
+        already-failing path, and a secondary failure here must never
+        replace or mask the original error the caller is propagating. Best
+        effort — if the gateway can't be reached, or refuses because the
+        order was already paid or already dead, the caller has nothing
+        further to do; log it and return. A provider with no real backing
+        gateway state to cancel (the mock provider) has nothing to do but
+        record that it was asked, for tests.
+        """
+        ...
+
+    @abstractmethod
     def parse_webhook(
         self, *, body: bytes, signature: str, event_id: str | None = None
     ) -> WebhookEvent:
@@ -120,3 +146,33 @@ class PaymentProvider(ABC):
     async def refund(
         self, *, provider_payment_id: str, amount_paise: int, notes: dict[str, str]
     ) -> str: ...
+
+    # AAD-QUAL-022: `sign_for_testing` and `verify_payment_link_callback`
+    # below are not abstract — only one concrete provider each actually
+    # implements them (the mock provider's own test-signing helper; the
+    # Razorpay Payment Links callback formula). They live here, not as
+    # `@abstractmethod`s every provider must define, so routes can call
+    # `payments.sign_for_testing(...)` / `payments.verify_payment_link_callback(...)`
+    # straight through this interface, with no `assert isinstance(payments,
+    # <ConcreteClass>)` needed to satisfy the type checker first. The
+    # `settings.payment_provider` check each caller already does before
+    # reaching these is what actually guarantees the right provider is
+    # configured; if that guard were ever wrong, the `NotImplementedError`
+    # below is the clear, on-purpose failure a route sees instead of an
+    # `AttributeError` from a missing method, or a passing-but-wrong
+    # `isinstance` narrowing that `python -O` silently strips.
+    def sign_for_testing(self, provider_order_id: str, provider_payment_id: str) -> str:
+        raise NotImplementedError(f"{self.name} does not support sign_for_testing")
+
+    def verify_payment_link_callback(
+        self,
+        *,
+        payment_link_id: str,
+        payment_link_reference_id: str,
+        payment_link_status: str,
+        payment_id: str,
+        signature: str,
+    ) -> bool:
+        raise NotImplementedError(
+            f"{self.name} does not support verify_payment_link_callback"
+        )

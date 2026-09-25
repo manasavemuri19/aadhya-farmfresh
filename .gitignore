@@ -6,7 +6,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 backend/*.egg-info/
+
+# ---- AAD-OPS-024: coverage run output ----
+# Generated locally (or in CI, once AAD-OPS-012 exists) by
+# `pytest --cov=app --cov-report=json` — scripts/check_coverage.py reads
+# coverage.json and never expects either file to be committed.
+.coverage
+coverage.json
 
 # ---- Build output ----
 .expo/

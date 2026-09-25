@@ -8,6 +8,7 @@ import { LocationPickerModal, type PickedLocation } from '../src/components/Loca
 import { authApi } from '../src/api/endpoints';
 import { useSession } from '../src/store/session';
 import { useLocationStore } from '../src/store/location';
+import { DEFAULT_ADDRESS_LABEL, SERVICE_CITY } from '../src/lib/address';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { Address } from '../src/api/types';
 
@@ -52,14 +53,18 @@ export default function EditDetailsScreen() {
   const [saved, setSaved] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
 
+  // AAD-MOB-018: 'located_no_address' means the GPS fix succeeded but the
+  // reverse-geocode step didn't — no `locationLine1` to fill in, but the
+  // coordinates are still real and worth keeping for a hand-typed address.
   const useCurrentLocation = () => {
-    if (locationStatus === 'found' && locationLine1) {
-      setLine1(locationLine1);
+    if (
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null
+    ) {
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
       setSaved(false);
     } else {
       void requestLocation();
@@ -87,20 +92,22 @@ export default function EditDetailsScreen() {
 
   // First tap only requests permission; if it resolves after that, apply it
   // as soon as it lands rather than making the person tap again.
+  // AAD-MOB-025: this used to suppress the exhaustive-deps warning rather
+  // than resolve it — the same closure-vs-deps gap as checkout.tsx's twin
+  // effect (see that file's comment for the full reasoning). Depending on
+  // everything actually read is the real fix; the suppression is gone.
   useEffect(() => {
     if (
-      locationStatus === 'found' && locationLine1 &&
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null &&
       line1.trim().length === 0
     ) {
-      setLine1(locationLine1);
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationStatus]);
+  }, [locationStatus, locationLine1, locationPincode, locationLatitude, locationLongitude, line1]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -111,11 +118,13 @@ export default function EditDetailsScreen() {
         ...(addressValid
           ? {
               address: {
-                label: 'Home',
+                // AAD-MOB-022: see src/lib/address.ts for why these two are
+                // constants and not a fuller fix.
+                label: DEFAULT_ADDRESS_LABEL,
                 line1: line1.trim(),
                 line2: '',
                 landmark: landmark.trim(),
-                city: 'Hyderabad',
+                city: SERVICE_CITY,
                 pincode: pincode.trim(),
                 latitude: coords?.latitude ?? null,
                 longitude: coords?.longitude ?? null,

@@ -22,14 +22,20 @@ def support_service(support) -> SupportService:
 
 
 async def test_create_ticket_round_trips(support, session, user):
+    # AAD-QUAL-035: `user` (conftest's fixture) is a plain dict — every
+    # other test file in this suite reads it as `user["id"]`. This file
+    # used attribute access instead (`user.id`), which has never worked;
+    # confirmed via baseline (pre-Batch-21, commit 6985ea4) that all three
+    # tests here failed identically before any of this session's changes —
+    # a pre-existing bug in the tests themselves, not a regression.
     ticket = await support.create(
-        user_id=user.id, message="My order has been stuck on Packed for a day.",
+        user_id=user["id"], message="My order has been stuck on Packed for a day.",
         context_node_id="orders_status",
     )
     await session.flush()
 
     assert ticket.id.startswith("sup_")
-    assert ticket.user_id == user.id
+    assert ticket.user_id == user["id"]
     assert ticket.message == "My order has been stuck on Packed for a day."
     assert ticket.context_node_id == "orders_status"
     assert ticket.created_at is not None
@@ -37,7 +43,7 @@ async def test_create_ticket_round_trips(support, session, user):
 
 async def test_context_node_id_is_optional(support, user):
     ticket = await support.create(
-        user_id=user.id, message="Something else entirely.", context_node_id=None,
+        user_id=user["id"], message="Something else entirely.", context_node_id=None,
     )
     assert ticket.context_node_id is None
 
@@ -46,7 +52,7 @@ async def test_service_returns_only_id_and_created_at(support_service, user):
     """The mailbox is server-side-only beyond this — nothing about the
     ticket's content or context should round-trip back to the client."""
     result = await support_service.submit(
-        user_id=user.id, message="Test", context_node_id="root",
+        user_id=user["id"], message="Test", context_node_id="root",
     )
     assert result.id.startswith("sup_")
     assert result.created_at is not None

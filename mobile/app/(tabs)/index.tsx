@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, useRouter } from 'expo-router';
@@ -71,6 +71,21 @@ export default function OrderTab() {
 
   const count = cartCount(items);
 
+  // AAD-MOB-014: a fresh keyExtractor/renderItem on every render defeats
+  // React.memo on ProductCard from the outside — FlatList's own cell
+  // renderer sees a new renderItem identity every time and re-invokes it
+  // regardless of whether ProductCard itself would have bailed out.
+  // Hoisting both into useCallback is what actually lets that memo pay off.
+  const keyExtractor = useCallback((item: ProductView) => item.id, []);
+  const renderItem = useCallback(
+    ({ item }: { item: ProductView }) => (
+      <View style={styles.gridItem}>
+        <ProductCard product={item} />
+      </View>
+    ),
+    [],
+  );
+
   if (isDeliveryAgent) return <Redirect href="/requests" />;
 
   if (catalog.isPending) return <Loading label="Bringing in today's stock" />;
@@ -88,17 +103,21 @@ export default function OrderTab() {
     <View style={styles.screen}>
       <FlatList
         data={products}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }: { item: ProductView }) => (
-          <View style={styles.gridItem}>
-            <ProductCard product={item} />
-          </View>
-        )}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
         numColumns={2}
         columnWrapperStyle={styles.gridRow}
         contentContainerStyle={[styles.list, { paddingBottom: count > 0 ? 110 : space.xl }]}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[0]}
+        // AAD-MOB-014: this is the app's primary screen on budget Android
+        // hardware. removeClippedSubviews lets off-screen cards (images
+        // included) be detached from the native view tree instead of just
+        // hidden; initialNumToRender is trimmed from FlatList's default of
+        // 10 to roughly one screen's worth at 2 columns, since the header
+        // above already pushes the first row down.
+        removeClippedSubviews
+        initialNumToRender={8}
         ListHeaderComponent={
           <View style={styles.headerWrap}>
             <LinearGradient

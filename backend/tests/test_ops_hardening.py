@@ -277,7 +277,7 @@ async def test_housekeeping_sweeps_immediately_at_startup(monkeypatch):
 
     monkeypatch.setattr(main_module, "_run_sweep_once", _fake_sweep_once)
 
-    task = asyncio.create_task(main_module._housekeeping(app=None))
+    task = asyncio.create_task(main_module._housekeeping())
     try:
         await asyncio.wait_for(ran.wait(), timeout=1.0)
     finally:

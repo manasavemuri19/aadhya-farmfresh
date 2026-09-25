@@ -34,3 +34,28 @@ def in_hyderabad_bounds(lat: float, lng: float) -> bool:
     lat_min, lat_max = HYDERABAD_LAT_RANGE
     lng_min, lng_max = HYDERABAD_LNG_RANGE
     return lat_min <= lat <= lat_max and lng_min <= lng <= lng_max
+
+
+# AAD-PERF-012: one degree of latitude is ~111.32km everywhere; one degree of
+# longitude shrinks toward the poles by a factor of cos(latitude) — at
+# Hyderabad's ~17°N that's still close to 1 (~106km), but this doesn't
+# assume that and computes it properly.
+_KM_PER_DEGREE_LAT = 111.32
+
+
+def bounding_box_km(lat: float, lng: float, radius_km: float) -> tuple[float, float, float, float]:
+    """A rectangular over-approximation of the circle of `radius_km` around
+    (lat, lng) — (lat_min, lat_max, lng_min, lng_max).
+
+    This is deliberately generous, not exact: a SQL WHERE clause can cheaply
+    narrow "everything on the whole planet" down to "everything in this
+    rectangle", and `haversine_km` then gives the real distance (and the
+    real yes/no on "within radius") for the much smaller set of rows that
+    survive it. The corners of the rectangle are up to ~40% farther from
+    the centre than `radius_km` — that's fine, since nothing downstream
+    trusts the box itself as the answer.
+    """
+    lat_delta = radius_km / _KM_PER_DEGREE_LAT
+    lng_km_per_degree = max(_KM_PER_DEGREE_LAT * cos(radians(lat)), 1e-6)
+    lng_delta = radius_km / lng_km_per_degree
+    return (lat - lat_delta, lat + lat_delta, lng - lng_delta, lng + lng_delta)

@@ -106,7 +106,7 @@ async def test_small_order_is_accepted(order_service, user, milk):
 async def test_ordering_more_than_stock_is_rejected_and_releases_nothing(
     order_service, user, products, milk
 ):
-    with pytest.raises(OutOfStock):
+    with pytest.raises(OutOfStock) as excinfo:
         await order_service.create_order(
             user_id=user["id"],
             request=order_request([("MILK-COW-1L", 9)]),
@@ -114,6 +114,53 @@ async def test_ordering_more_than_stock_is_rejected_and_releases_nothing(
         )
     remaining = await stock_of(products, "MILK-COW-1L")
     assert remaining == 5   # untouched
+    # AAD-QUAL-013: MILK-COW-1L has 5 in stock and a max_per_order of 10, so
+    # stock — not the per-order cap — is the tighter, honest bound here.
+    line = excinfo.value.details["lines"][0]
+    assert line["reason"] == "out_of_stock"
+    assert line["max_qty"] == 5
+    assert "ran out" in excinfo.value.message
+
+
+async def test_ordering_more_than_the_per_order_limit_says_so_not_ran_out(
+    order_service, user, products, categories
+):
+    """AAD-QUAL-013: a customer asking for 12 of a fully stocked item used to
+    be told it 'ran out' — refreshing showed plenty of stock, and retrying
+    failed identically, with no way to work out what to do. Plentiful
+    stock plus a small per-order cap should say so instead."""
+    from app.schemas.catalog import Product, Variant
+
+    product = Product(
+        id="prd_bulk_test",
+        slug="bulk-test-item",
+        name="Bulk Test Item",
+        description="",
+        category="milk",
+        prep_minutes=10,
+        variants=[
+            Variant(
+                sku="BULK-TEST", label="1 unit", pack_value=1, pack_unit="piece",
+                price_paise=1000, stock_qty=500, max_per_order=10,
+            )
+        ],
+    )
+    await products.upsert_product(product)
+    await products.session.flush()
+
+    with pytest.raises(OutOfStock) as excinfo:
+        await order_service.create_order(
+            user_id=user["id"],
+            request=order_request([("BULK-TEST", 12)]),
+            idempotency_key=None,
+        )
+
+    line = excinfo.value.details["lines"][0]
+    assert line["reason"] == "quantity_limit"
+    assert line["max_qty"] == 10
+    assert line["available"] == 10
+    assert "ran out" not in excinfo.value.message
+    assert "limit" in excinfo.value.message
 
 
 async def test_client_total_mismatch_is_rejected(order_service, user, milk):
@@ -139,22 +186,46 @@ async def test_idempotency_key_replays_the_same_order(order_service, user, milk)
 async def test_idempotency_key_reuse_with_a_different_body_is_a_conflict(
     order_service, user, milk
 ):
+    """AAD-QUAL-017: the fingerprint is now just lines + payment_method +
+    expected_total_paise, so this needs to vary one of *those* to still be
+    a real conflict — a different qty, not just different notes (see the
+    test right below this one for the notes case)."""
     await order_service.create_order(
         user_id=user["id"],
         request=order_request([("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD),
         idempotency_key="checkout-attempt-0002",
     )
-    # Same key, materially different request body.
+    # Same key, materially different request body (different quantity).
     with pytest.raises(Conflict):
         await order_service.create_order(
             user_id=user["id"],
             request=order_request(
-                [("MILK-COW-1L", 3)],
+                [("MILK-COW-1L", 4)],
                 payment_method=PaymentMethod.COD,
-                notes="leave at the gate",
             ),
             idempotency_key="checkout-attempt-0002",
         )
+
+
+async def test_idempotency_key_reuse_with_only_notes_changed_still_replays(
+    order_service, user, milk
+):
+    """AAD-QUAL-017: the fingerprint used to hash the entire request body,
+    so a retry that only re-typed the delivery note (or re-geocoded the
+    same address) looked like a "different order" and got a false
+    Conflict. Notes aren't part of the fingerprint anymore — this is now a
+    replay, same as the identical-body case above."""
+    request = order_request([("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD)
+    first = await order_service.create_order(
+        user_id=user["id"], request=request, idempotency_key="checkout-attempt-0003"
+    )
+    retried = order_request(
+        [("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD, notes="leave at the gate"
+    )
+    second = await order_service.create_order(
+        user_id=user["id"], request=retried, idempotency_key="checkout-attempt-0003"
+    )
+    assert first.id == second.id
 
 
 async def test_cancelling_returns_stock_exactly_once(order_service, user, products, milk):

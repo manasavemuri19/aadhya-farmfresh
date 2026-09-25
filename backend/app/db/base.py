@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from app.core import outbox
 from app.core.config import settings
 
 log = logging.getLogger(__name__)
@@ -95,16 +96,29 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 
     Commits on success, rolls back on any exception. Request handlers use the
     `db_session` dependency instead, which does the same thing per request.
+
+    AAD-REL-004: the housekeeping sweeper's `_cancel` calls (main.py's
+    `_run_sweep_once`, via `release_expired_holds`) go through this scope,
+    not `TransactionalRoute` — so this is the other commit boundary that
+    needs to open and drain an outbox batch, the same way, for the exact
+    same reason: a push notification must never fire before the sweep's
+    commit actually lands, and never at all if it doesn't.
     """
     session = get_session_factory()()
+    outbox_token = outbox.start_batch()
     try:
         yield session
         await session.commit()
     except Exception:
         await session.rollback()
         raise
+    else:
+        # Only on the success path — matches TransactionalRoute exactly:
+        # nothing queued during this scope may fire on a rollback.
+        await outbox.drain()
     finally:
         await session.close()
+        outbox.end_batch(outbox_token)
 
 
 async def ping() -> bool:

@@ -42,7 +42,19 @@ dev = [
     # all — see AAD-OPS-012 — so wiring this into a scheduled CI job is
     # future work, not something to fake here).
     "pip-audit>=2.7",
+    # AAD-OPS-024: coverage measurement. Nothing reported it before this,
+    # so the gaps AAD-OPS-021 found in the auth/authorization layer were
+    # invisible — see scripts/check_coverage.py for how this is gated.
+    "pytest-cov>=6.0",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.setuptools.packages.find]
 # Only "app" is the installable package. "alembic" is migration tooling that

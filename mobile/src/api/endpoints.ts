@@ -1,16 +1,23 @@
 import { api } from './client';
 import type {
-  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderStatus, OrderView, ProductView,
-  Quote, TokenPair, UserProfile,
+  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderStatus, OrderView, Page,
+  ProductView, Quote, TokenPair, UserProfile,
 } from './types';
 
 export interface CartLineInput { sku: string; qty: number }
 
+// AAD-MOB-006: `api.get` now defaults to `auth: true` — these three are the
+// deliberate exception (browsable before sign-in), so they opt out
+// explicitly rather than relying on a default that used to mean the same
+// thing for every other GET too.
 export const catalogApi = {
   get: (category?: string) =>
-    api.get<CatalogResponse>(`/catalog${category && category !== 'all' ? `?category=${category}` : ''}`),
-  product: (idOrSlug: string) => api.get<ProductView>(`/catalog/products/${idOrSlug}`),
-  search: (q: string) => api.get<ProductView[]>(`/catalog/search?q=${encodeURIComponent(q)}`),
+    api.get<CatalogResponse>(
+      `/catalog${category && category !== 'all' ? `?category=${category}` : ''}`,
+      false,
+    ),
+  product: (idOrSlug: string) => api.get<ProductView>(`/catalog/products/${idOrSlug}`, false),
+  search: (q: string) => api.get<ProductView[]>(`/catalog/search?q=${encodeURIComponent(q)}`, false),
 };
 
 export const cartApi = {
@@ -30,6 +37,14 @@ export const authApi = {
   // they're kept only for call sites that genuinely update just one thing.
   updateProfile: (changes: { name?: string; phone?: string; address?: Address }) =>
     api.patch<UserProfile>('/auth/me', changes),
+  // AAD-MOB-022: `previousLabel` is the address's *current* name — the
+  // route relabels that row to `address.label` (and updates its other
+  // fields at the same time) rather than leaving a duplicate behind, which
+  // is what calling `saveAddress` a second time under a new label would do.
+  renameAddress: (previousLabel: string, address: Address) =>
+    api.patch<void>(`/auth/me/addresses/${encodeURIComponent(previousLabel)}`, address),
+  deleteAddress: (label: string) =>
+    api.delete<void>(`/auth/me/addresses/${encodeURIComponent(label)}`),
 };
 
 export interface CreateOrderInput {
@@ -43,7 +58,12 @@ export interface CreateOrderInput {
 export const ordersApi = {
   create: (input: CreateOrderInput, idempotencyKey: string) =>
     api.post<OrderView>('/orders', input, { auth: true, idempotencyKey }),
-  list: () => api.get<OrderView[]>('/orders', true),
+  // AAD-API-004: GET /orders now returns a cursor page instead of a bare
+  // array, since a customer used to be physically unable to see past their
+  // 20 most recent orders. `before` is the previous page's `next_cursor`;
+  // omit it for the first page.
+  list: (before?: string) =>
+    api.get<Page<OrderView>>(`/orders${before ? `?before=${encodeURIComponent(before)}` : ''}`, true),
   get: (id: string) => api.get<OrderView>(`/orders/${id}`, true),
   cancel: (id: string, reason: string) =>
     api.post<OrderView>(`/orders/${id}/cancel`, { reason }, { auth: true }),
@@ -73,6 +93,11 @@ export const paymentsApi = {
 export const notificationsApi = {
   registerToken: (token: string, platform: 'android' | 'ios' = 'android') =>
     api.post<void>('/notifications/register-token', { token, platform }, { auth: true }),
+  // AAD-SEC-032: sign-out used to only ever clear the local keychain —
+  // nothing told the server this device should stop receiving the
+  // previous account's notifications. Called from session.ts's signOut().
+  deregisterToken: (token: string) =>
+    api.delete<void>(`/notifications/token?token=${encodeURIComponent(token)}`),
 };
 
 export interface SupportTicketCreated { id: string; created_at: string }
@@ -122,4 +147,13 @@ export const deliveryApi = {
     api.post<DeliveryOrderView>(`/delivery/orders/${orderId}/status`, { status, note }, { auth: true }),
   reportLocation: (latitude: number, longitude: number) =>
     api.post<void>('/delivery/location', { latitude, longitude }, { auth: true }),
+  // AAD-SEC-027: the only way left to reach 'delivered' from this app —
+  // 'delivered' is no longer accepted by updateStatus above (the backend
+  // rejects it, see _AGENT_ALLOWED_STATUSES). `code` is the 4-digit
+  // in-app code the customer reads out; a wrong one comes back as a 409
+  // whose message says how many attempts are left, not a generic error.
+  verifyDelivery: (orderId: string, code: string) =>
+    api.post<DeliveryOrderView>(
+      `/delivery/orders/${orderId}/verify-delivery`, { code }, { auth: true },
+    ),
 };

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import { Text } from './Text';
 import { Button } from './Button';
@@ -16,7 +16,14 @@ import type { ProductView } from '../api/types';
  * that copy competed with the things people actually scan for (what is it,
  * what size, how much), so it's gone from the card entirely.
  */
-export function ProductCard({ product }: { product: ProductView }) {
+// AAD-MOB-014: this is the cell renderer for the shop grid's FlatList — with
+// no memoization, every visible card re-rendered on every keystroke in
+// search (OrderTab's inline renderItem gave each one a fresh element every
+// time regardless), every category tap, and every cart mutation elsewhere
+// on the screen. `product` is a stable reference from the catalog query
+// (filtering builds a new array, not new item objects), so a plain
+// reference-equality memo is enough — no custom comparator needed.
+export const ProductCard = memo(function ProductCard({ product }: { product: ProductView }) {
   const items = useCart((s) => s.items);
   const add = useCart((s) => s.add);
   const setQty = useCart((s) => s.setQty);
@@ -31,6 +38,29 @@ export function ProductCard({ product }: { product: ProductView }) {
   if (!variant) return null;
 
   const inCart = items[variant.sku]?.qty ?? 0;
+
+  // AAD-MOB-023: this is the primary interactive tile on the shop screen,
+  // and until now carried no combined description at all — a screen reader
+  // walked its individual, unlabeled Text nodes one at a time (name, then
+  // each variant chip, then the price, then whatever stock text happened to
+  // be present), never announcing "what is this card" as one thing.
+  // Attached to the product name — the first element actually reached, and
+  // the one most naturally read first — rather than restructuring the card
+  // into one opaque accessible group, which would swallow VariantPicker's
+  // own already-correct per-chip radio roles and the Add/QtyStepper
+  // control beneath it. The visible name text is unchanged; only what's
+  // spoken for it changes. Downstream price/stock text is still reachable
+  // on its own right after, so this trades a little repetition for getting
+  // the summary announced at all, rather than leaving it silent.
+  const availabilityLabel = !variant.in_stock
+    ? 'sold out'
+    : variant.low_stock
+      ? `only ${variant.max_qty} left`
+      : 'in stock';
+  const priceLabel = variant.mrp_paise
+    ? `${formatPaise(variant.price_paise)}, reduced from ${formatPaise(variant.mrp_paise)}`
+    : formatPaise(variant.price_paise);
+  const cardSummaryLabel = `${product.name}, ${variant.label}, ${priceLabel}, ${availabilityLabel}`;
 
   return (
     <View style={styles.card}>
@@ -49,7 +79,14 @@ export function ProductCard({ product }: { product: ProductView }) {
       </View>
 
       <View style={styles.body}>
-        <Text variant="title" numberOfLines={1} style={styles.name}>{product.name}</Text>
+        <Text
+          variant="title"
+          numberOfLines={1}
+          style={styles.name}
+          accessibilityLabel={cardSummaryLabel}
+        >
+          {product.name}
+        </Text>
 
         <VariantPicker variants={product.variants} selectedSku={variant.sku} onSelect={setSelectedSku} />
 
@@ -95,7 +132,7 @@ export function ProductCard({ product }: { product: ProductView }) {
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   card: {

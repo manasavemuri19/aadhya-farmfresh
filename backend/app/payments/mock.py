@@ -29,6 +29,12 @@ def _sign(message: str) -> str:
 class MockPaymentProvider(PaymentProvider):
     name = "mock"
 
+    def __init__(self) -> None:
+        # AAD-PAY-016: no real gateway state to actually void — this just
+        # records what it was asked to cancel, so a test can assert the
+        # caller reached for cleanup at all without needing a real gateway.
+        self.cancelled_order_ids: list[str] = []
+
     async def create_order(
         self,
         *,
@@ -61,6 +67,9 @@ class MockPaymentProvider(PaymentProvider):
                             "to simulate the gateway confirming payment",
             },
         )
+
+    async def cancel_order(self, *, provider_order_id: str) -> None:
+        self.cancelled_order_ids.append(provider_order_id)
 
     def sign_for_testing(self, provider_order_id: str, provider_payment_id: str) -> str:
         return _sign(f"{provider_order_id}|{provider_payment_id}")

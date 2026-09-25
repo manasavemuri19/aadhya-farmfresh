@@ -9,6 +9,7 @@ import { LocationPickerModal, type PickedLocation } from '../components/Location
 import { authApi } from '../api/endpoints';
 import { useSession } from '../store/session';
 import { useLocationStore } from '../store/location';
+import { DEFAULT_ADDRESS_LABEL, SERVICE_CITY } from '../lib/address';
 import { color, font, radius, size, space } from '../theme/tokens';
 import type { Address } from '../api/types';
 
@@ -52,14 +53,18 @@ export function CompleteProfileScreen() {
   const addressValid = line1.trim().length >= 4 && PINCODE_PATTERN.test(pincode.trim());
   const canSave = nameValid && phoneValid && addressValid;
 
+  // AAD-MOB-018: 'located_no_address' means the GPS fix succeeded but the
+  // reverse-geocode step didn't — no `locationLine1` to fill in, but the
+  // coordinates are still real and worth keeping for a hand-typed address.
   const useCurrentLocation = () => {
-    if (locationStatus === 'found' && locationLine1) {
-      setLine1(locationLine1);
+    if (
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null
+    ) {
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
     } else {
       void requestLocation();
     }
@@ -85,11 +90,13 @@ export function CompleteProfileScreen() {
   const save = useMutation({
     mutationFn: () => {
       const address: Address = {
-        label: 'Home',
+        // AAD-MOB-022: see src/lib/address.ts for why these two are
+        // constants and not a fuller fix.
+        label: DEFAULT_ADDRESS_LABEL,
         line1: line1.trim(),
         line2: '',
         landmark: landmark.trim(),
-        city: 'Hyderabad',
+        city: SERVICE_CITY,
         pincode: pincode.trim(),
         latitude: coords?.latitude ?? null,
         longitude: coords?.longitude ?? null,

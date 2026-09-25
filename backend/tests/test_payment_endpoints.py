@@ -87,6 +87,9 @@ def razorpay_provider(monkeypatch):
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
     monkeypatch.setattr(settings, "razorpay_key_secret", SecretStr(FAKE_KEY_SECRET))
     monkeypatch.setattr(settings, "razorpay_webhook_secret", SecretStr(FAKE_WEBHOOK_SECRET))
+    monkeypatch.setattr(
+        settings, "razorpay_callback_url", "https://example.test/v1/payments/link-redirect"
+    )
     get_payment_provider.cache_clear()
     yield
     get_payment_provider.cache_clear()
@@ -340,6 +343,35 @@ async def test_webhook_with_a_bad_signature_is_rejected_and_does_not_confirm(asg
     resp = await asgi_client.post(
         "/v1/payments/webhook", content=body,
         headers={"content-type": "application/json", "x-razorpay-signature": "0" * 64},
+    )
+
+    assert resp.status_code == 402, resp.text
+    assert resp.json()["error"]["code"] == "payment_failed"
+    status_, payment_status = await _order_status(seeded)
+    assert status_ == OrderStatus.PENDING_PAYMENT.value
+    assert payment_status == PaymentStatus.CREATED.value
+
+
+async def test_a_correct_signature_sent_only_as_x_mock_signature_is_rejected(
+    asgi_client, seeded
+):
+    """AAD-SEC-024: before this fix, `signature = x_razorpay_signature or
+    x_mock_signature or ""` meant a request with no `x-razorpay-signature`
+    header fell back to whatever `x-mock-signature` carried — so the real,
+    correctly-computed webhook signature sent under the *mock* header name
+    alone would have authenticated the webhook even with `payment_provider`
+    set to "razorpay" (this fixture's setting for the whole file). That's
+    the concrete case the finding's "fails closed today, but incidentally"
+    warning was about. The fix selects the header by the configured
+    provider, so this must now be rejected exactly like a missing
+    signature — proving x-mock-signature is never consulted at all when
+    the real provider is active, not just that its value happens not to
+    verify."""
+    body, real_signature = _webhook_body(_paid_webhook_payload(seeded))
+
+    resp = await asgi_client.post(
+        "/v1/payments/webhook", content=body,
+        headers={"content-type": "application/json", "x-mock-signature": real_signature},
     )
 
     assert resp.status_code == 402, resp.text

@@ -7,40 +7,52 @@ end of the day can be reconstructed rather than argued about.
 
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 
 from app.api.deps import (
     AdminUser,
     StaffUser,
+    get_cash_service,
     get_delivery_service,
-    get_order_repo,
+    get_idempotency_repo,
     get_order_service,
     get_product_repo,
+    get_support_service,
 )
 from app.api.route import TransactionalRoute
 from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
-from app.domain.enums import OrderStatus
-from app.repositories.orders import OrderRepository
+from app.domain.enums import OrderStatus, SupportTicketStatus
+from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.products import ProductRepository
+from app.schemas.cash import RecordSettlementRequest, SettlementView
 from app.schemas.catalog import Product
+from app.schemas.common import Page
 from app.schemas.delivery import ReassignDeliveryRequest
 from app.schemas.order import (
     AdjustStockRequest,
     OrderView,
+    SetAvailabilityRequest,
     SetPriceRequest,
     UpdateOrderStatusRequest,
 )
+from app.schemas.support import SupportTicketView
+from app.services.cash_service import CashService
 from app.services.delivery_service import DeliveryService
 from app.services.order_service import OrderService
+from app.services.support_service import SupportService
 
 router = APIRouter(prefix="/admin", tags=["admin"], route_class=TransactionalRoute)
 
 Products = Annotated[ProductRepository, Depends(get_product_repo)]
 Orders = Annotated[OrderService, Depends(get_order_service)]
-OrderRepo = Annotated[OrderRepository, Depends(get_order_repo)]
 Deliveries = Annotated[DeliveryService, Depends(get_delivery_service)]
+Support = Annotated[SupportService, Depends(get_support_service)]
+Idempotency = Annotated[IdempotencyRepository, Depends(get_idempotency_repo)]
+Cash = Annotated[CashService, Depends(get_cash_service)]
 
 
 @router.get("/products", response_model=list[Product])
@@ -51,7 +63,11 @@ async def list_products(staff: StaffUser, products: Products) -> list[Product]:
 
 @router.post("/stock", response_model=dict)
 async def adjust_stock(
-    body: AdjustStockRequest, staff: StaffUser, products: Products
+    body: AdjustStockRequest,
+    staff: StaffUser,
+    products: Products,
+    idempotency: Idempotency,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, object]:
     """Set or adjust stock for one SKU.
 
@@ -66,6 +82,19 @@ async def adjust_stock(
     reservation. Because the swap is guaranteed accurate when it succeeds,
     the ledger delta computed from it is the real delta, not the absolute
     value the ledger used to record verbatim.
+
+    AAD-SEC-026: `set_qty`'s compare-and-swap above already makes a
+    double-tap safe on its own — a repeat with the same stale
+    `expected_qty` just gets the same 409. `delta_qty` has no such
+    self-protection (there's nothing to compare against: "+2" is a valid
+    call every time), so a double-tap on a slow connection genuinely
+    applies twice. `Idempotency-Key` is optional here, not required like
+    order creation (`AAD-API-003`) — this route predates any staff client
+    sending one, and making it mandatory would break that client rather
+    than fix anything. When a caller does send one, the same
+    `IdempotencyRepository` order creation already uses backs a claim
+    keyed on `(sku, delta_qty, reason)`, so a genuine retry replays the
+    cached result instead of re-applying the delta.
     """
     if (body.set_qty is None) == (body.delta_qty is None):
         raise ValidationError("Send exactly one of set_qty or delta_qty.")
@@ -89,7 +118,34 @@ async def adjust_stock(
         delta = body.set_qty - body.expected_qty
         reason = f"{body.reason}:set"
     else:
-        if not await products.adjust_stock(body.sku, body.delta_qty):
+        fingerprint = None
+        if idempotency_key:
+            fingerprint = hashlib.sha256(
+                f"{body.sku}:{body.delta_qty}:{body.reason}".encode()
+            ).hexdigest()
+            existing = await idempotency.claim(staff.user_id, idempotency_key, fingerprint)
+            if existing is not None:
+                if existing.get("fingerprint") not in (None, fingerprint):
+                    raise Conflict(
+                        "This idempotency key was already used for a "
+                        "different adjustment."
+                    )
+                if existing.get("status") == "completed" and existing.get("response"):
+                    return existing["response"]
+                raise Conflict("That adjustment is still being applied. Give it a moment.")
+
+        ok, failure = await products.adjust_stock(body.sku, body.delta_qty)
+        if not ok:
+            # AAD-API-005: these three used to all come back as the same
+            # `False`, so a mistyped SKU and a genuine negative-stock
+            # attempt got the identical, misleading message.
+            if failure == "no_such_sku":
+                raise NotFound("No such SKU.")
+            if failure == "not_tracked":
+                raise ValidationError(
+                    "This item isn't stock-tracked (made to order) — "
+                    "there's no shelf count to adjust."
+                )
             raise ValidationError("That adjustment would take stock below zero.")
         delta = body.delta_qty
         reason = f"{body.reason}:delta"
@@ -97,7 +153,10 @@ async def adjust_stock(
     await products.record_stock_movement(
         sku=body.sku, delta=delta, reason=reason, actor=staff.user_id
     )
-    return {"sku": body.sku, "ok": True}
+    result: dict[str, object] = {"sku": body.sku, "ok": True}
+    if body.delta_qty is not None and idempotency_key:
+        await idempotency.complete(staff.user_id, idempotency_key, result)
+    return result
 
 
 @router.post("/price", response_model=dict)
@@ -130,31 +189,51 @@ async def set_price(
 
 @router.post("/products/{sku}/availability", response_model=dict)
 async def set_availability(
-    sku: str, active: bool, staff: StaffUser, products: Products
+    sku: str, body: SetAvailabilityRequest, staff: StaffUser, products: Products
 ) -> dict[str, object]:
     """The 'sold out for today' switch, without touching stock counts.
-    AAD-DATA-017: the change is now recorded in catalog_audit."""
-    if not await products.set_variant_active(sku, active, actor=staff.user_id):
+    AAD-DATA-017: the change is now recorded in catalog_audit.
+
+    AAD-API-007: `active` used to be an unannotated parameter, which FastAPI
+    binds as a query string on a POST — `?active=false` carrying the state
+    change instead of the body every other mutation route here uses. Now a
+    proper `SetAvailabilityRequest` body, same shape as before on the wire
+    (`{"active": false}`), just no longer in the URL.
+    """
+    if not await products.set_variant_active(sku, body.active, actor=staff.user_id):
         raise NotFound("No such SKU.")
-    return {"sku": sku, "is_active": active}
+    return {"sku": sku, "is_active": body.active}
 
 
-@router.get("/orders", response_model=list[OrderView])
+@router.get("/orders", response_model=Page[OrderView])
 async def order_queue(
     staff: StaffUser,
     svc: Orders,
-    orders: OrderRepo,
     status: Annotated[list[OrderStatus] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[OrderView]:
-    """Oldest first — this is a work queue, not a feed."""
+    after: Annotated[
+        datetime | None,
+        Query(description="AAD-API-004: pass the previous `next_cursor` to walk further in."),
+    ] = None,
+) -> Page[OrderView]:
+    """Oldest first — this is a work queue, not a feed.
+
+    AAD-API-004: used to have a hard cap and no cursor, so orders past
+    `limit` on a busy morning simply never appeared here — not an error,
+    just invisible to the people who pack them. `has_more`/`next_cursor`
+    now say so explicitly instead of staying silent about it.
+
+    Goes through OrderService.list_queue_for_staff rather than reading
+    OrderRepository directly — also closes AAD-QUAL-028, which flagged this
+    route reaching into the service's private `_to_view` to make up for
+    that missing method.
+    """
     wanted = status or [
         OrderStatus.CONFIRMED,
         OrderStatus.PACKED,
         OrderStatus.OUT_FOR_DELIVERY,
     ]
-    docs = await orders.list_by_status(wanted, limit=limit)
-    return [svc._to_view(doc) for doc in docs]
+    return await svc.list_queue_for_staff(wanted, limit=limit, after=after)
 
 
 @router.post("/orders/{order_id}/status", response_model=OrderView)
@@ -188,7 +267,59 @@ async def reassign_delivery(
     await svc.reassign(order_id, new_agent_id=body.agent_id, actor_id=staff.user_id, note=body.note)
 
 
+@router.post("/cod/settlements", response_model=SettlementView)
+async def settle_cod_cash(
+    body: RecordSettlementRequest, admin: AdminUser, svc: Cash
+) -> SettlementView:
+    """AAD-BIZ-004: an admin records what a delivery agent physically handed
+    back — nothing here touches a gateway or moves real money, it only
+    compares that figure against what the agent's unclaimed COD deliveries
+    (OrderService.verify_delivery_code) say is owed.
+
+    Admin-only, not staff, matching the same owner-only bar refunds get
+    (see update_order_status above) — this is the other side of the same
+    real-cash-handling coin. An exact match settles cleanly; any difference
+    is recorded as a discrepancy with `body.reason`, never silently marked
+    settled — see CashService.settle_agent."""
+    return await svc.settle_agent(
+        agent_id=body.agent_id,
+        actual_amount_paise=body.actual_amount_received_paise,
+        reason=body.reason,
+        actor_id=admin.user_id,
+    )
+
+
 @router.post("/maintenance/release-holds", response_model=dict)
 async def release_holds(staff: StaffUser, svc: Orders) -> dict[str, int]:
     """Manual trigger for the abandoned-checkout sweeper. Also runs on a timer."""
     return {"released": await svc.release_expired_holds()}
+
+
+@router.get("/support/tickets", response_model=Page[SupportTicketView])
+async def list_support_tickets(
+    staff: StaffUser,
+    svc: Support,
+    status: Annotated[SupportTicketStatus | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    after: Annotated[
+        datetime | None,
+        Query(description="Pass the previous next_cursor to walk further in."),
+    ] = None,
+) -> Page[SupportTicketView]:
+    """AAD-BIZ-005: the read side of a mailbox that used to have none at
+    all. Oldest first, same reasoning as the order queue above — this is a
+    work queue, not a feed. Omit `status` for everything; pass `open` to
+    see only what still needs attention."""
+    return await svc.list_for_staff(status=status, limit=limit, after=after)
+
+
+@router.post("/support/tickets/{ticket_id}/close", response_model=dict)
+async def close_support_ticket(
+    ticket_id: str, staff: StaffUser, svc: Support
+) -> dict[str, object]:
+    """Marks a ticket handled. 404s rather than silently no-op'ing on an
+    unknown id or one that's already closed, so a staff app can't get stuck
+    believing a click succeeded when it didn't."""
+    if not await svc.close(ticket_id):
+        raise NotFound("No such open ticket.")
+    return {"id": ticket_id, "status": SupportTicketStatus.CLOSED.value}

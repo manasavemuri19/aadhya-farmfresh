@@ -13,6 +13,7 @@ import { cartLines, useCart } from '../src/store/cart';
 import { useSession } from '../src/store/session';
 import { useLocationStore } from '../src/store/location';
 import { formatPaise } from '../src/lib/money';
+import { DEFAULT_ADDRESS_LABEL, SERVICE_CITY } from '../src/lib/address';
 import { color, font, radius, size, space } from '../src/theme/tokens';
 import type { Address, PaymentMethod } from '../src/api/types';
 
@@ -39,6 +40,13 @@ export default function CheckoutScreen() {
   const [notes, setNotes] = useState('');
   const [method, setMethod] = useState<PaymentMethod>('online');
   const [prefilled, setPrefilled] = useState(false);
+  // AAD-MOB-022 (multi-address support): which saved address (if any) the
+  // form currently matches — null means "typed/detected manually, not one
+  // of the saved ones". Set whenever a saved address is picked below, and
+  // cleared the moment any field is hand-edited or filled from location
+  // detection instead, since at that point the form no longer necessarily
+  // matches what's actually saved under that label.
+  const [selectedAddressLabel, setSelectedAddressLabel] = useState<string | null>(null);
   // Tracks whichever source last filled the address text fields, so the
   // order actually carries real coordinates instead of always submitting
   // null — the two effects below are what set this, mirroring exactly
@@ -64,9 +72,11 @@ export default function CheckoutScreen() {
   const locationLongitude = useLocationStore((s) => s.longitude);
   const requestLocation = useLocationStore((s) => s.request);
 
-  // Fill from a saved profile address first; only reach for device location
+  // Fill from the first saved address first; only reach for device location
   // if there isn't one, and never overwrite something the person has already
-  // started typing.
+  // started typing. Matches the chip selection below picking the same
+  // address by default (see selectAddress), so the form and the chip row
+  // agree about which one is "selected" from the moment this screen opens.
   useEffect(() => {
     if (prefilled) return;
     const saved = user?.addresses?.[0];
@@ -78,19 +88,45 @@ export default function CheckoutScreen() {
         setCoords({ latitude: saved.latitude, longitude: saved.longitude });
         setCoordsPincode(saved.pincode ?? null);
       }
+      setSelectedAddressLabel(saved.label);
       setPrefilled(true);
     }
   }, [user, prefilled]);
 
+  // AAD-MOB-022: pick one of the saved addresses shown in the chip row
+  // below. Marks prefilled too, same as the initial-load effect above, so
+  // that effect never overwrites a deliberate choice if it somehow hasn't
+  // fired yet.
+  const selectAddress = (saved: Address) => {
+    setLine1(saved.line1);
+    setLandmark(saved.landmark ?? '');
+    setPincode(saved.pincode ?? '');
+    if (saved.latitude != null && saved.longitude != null) {
+      setCoords({ latitude: saved.latitude, longitude: saved.longitude });
+      setCoordsPincode(saved.pincode ?? null);
+    } else {
+      setCoords(null);
+      setCoordsPincode(null);
+    }
+    setSelectedAddressLabel(saved.label);
+    setPrefilled(true);
+  };
+
+  // AAD-MOB-018: 'located_no_address' means the GPS fix succeeded but the
+  // reverse-geocode step didn't — there's no `locationLine1` to fill in, but
+  // the coordinates are still real and worth keeping so the pin lands in
+  // the right place even while the address line is typed by hand.
   const useCurrentLocation = () => {
-    if (locationStatus === 'found' && locationLine1) {
-      setLine1(locationLine1);
+    if (
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null
+    ) {
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
       setPrefilled(true);
+      setSelectedAddressLabel(null);
     } else {
       void requestLocation();
     }
@@ -102,21 +138,37 @@ export default function CheckoutScreen() {
     if (picked.line1) setLine1(picked.line1);
     if (picked.pincode) setPincode(picked.pincode);
     setPrefilled(true);
+    setSelectedAddressLabel(null);
     setPickerVisible(false);
   };
 
   // If the location finishes fetching after the button was already tapped
   // once (first tap only requests permission), apply it as soon as it lands.
+  // AAD-MOB-025: used to depend on `locationStatus` alone while also reading
+  // `line1`/`locationLine1`/`locationPincode`/`locationLatitude`/
+  // `locationLongitude` from the closure — safe today only because every one
+  // of those store fields is written atomically alongside `status` in
+  // location.ts's own `set(...)` calls, so `status` happens to change
+  // whenever they do. That's an invariant of the store, not of this effect,
+  // and nothing enforced it: a future change to location.ts that updated one
+  // of those fields without also changing `status` would silently stop
+  // applying here, with the stale value sitting unused in a closure that
+  // never re-ran. Depending on everything actually read removes that trap;
+  // `line1` re-running the effect on every keystroke is harmless since the
+  // `line1.trim().length === 0` gate is the first thing checked and turns
+  // most of those runs into a no-op.
   useEffect(() => {
-    if (locationStatus === 'found' && locationLine1 && line1.trim().length === 0) {
-      setLine1(locationLine1);
+    if (
+      (locationStatus === 'found' || locationStatus === 'located_no_address') &&
+      locationLatitude != null && locationLongitude != null &&
+      line1.trim().length === 0
+    ) {
+      if (locationLine1) setLine1(locationLine1);
       if (locationPincode) setPincode(locationPincode);
-      if (locationLatitude != null && locationLongitude != null) {
-        setCoords({ latitude: locationLatitude, longitude: locationLongitude });
-        setCoordsPincode(locationPincode ?? null);
-      }
+      setCoords({ latitude: locationLatitude, longitude: locationLongitude });
+      setCoordsPincode(locationPincode ?? null);
     }
-  }, [locationStatus]);
+  }, [locationStatus, locationLine1, locationPincode, locationLatitude, locationLongitude, line1]);
 
   // AAD-MOB-016: a *complete*, genuinely different pincode is the edit that
   // invalidates a captured point — a still-in-progress edit (fewer than 6
@@ -124,6 +176,7 @@ export default function CheckoutScreen() {
   // someone is mid-correction.
   const updatePincode = (t: string) => {
     setPincode(t);
+    setSelectedAddressLabel(null);
     const trimmed = t.trim();
     if (coords && coordsPincode && /^\d{6}$/.test(trimmed) && trimmed !== coordsPincode) {
       setCoords(null);
@@ -142,11 +195,15 @@ export default function CheckoutScreen() {
   const placeOrder = useMutation({
     mutationFn: () => {
       const address: Address = {
-        label: 'Home',
+        // AAD-MOB-022: the real label of whichever saved address is
+        // currently selected (see selectAddress / the chip row below), or
+        // the shared default when the address was typed/detected by hand
+        // instead and was never one of the saved ones.
+        label: selectedAddressLabel ?? DEFAULT_ADDRESS_LABEL,
         line1: line1.trim(),
         line2: '',
         landmark: landmark.trim(),
-        city: 'Hyderabad',
+        city: SERVICE_CITY,
         pincode: pincode.trim(),
         latitude: coords?.latitude ?? null,
         longitude: coords?.longitude ?? null,
@@ -184,10 +241,7 @@ export default function CheckoutScreen() {
   if (quote.isPending) return <Loading />;
   if (quote.isError) {
     return (
-      <ErrorState
-        message={quote.error instanceof Error ? quote.error.message : 'Try again.'}
-        onRetry={() => void quote.refetch()}
-      />
+      <ErrorState error={quote.error} onRetry={() => void quote.refetch()} />
     );
   }
 
@@ -201,6 +255,39 @@ export default function CheckoutScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text variant="title">Where should we deliver?</Text>
+
+        {/* AAD-MOB-022: pick one of the saved addresses, or fall through to
+            the location buttons / manual fields below for anything else —
+            picking a chip fills those same fields rather than replacing
+            them with a separate read-only summary, so editing a saved
+            address's details for just this one order still works exactly
+            like it always did. */}
+        {(user?.addresses?.length ?? 0) > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.addressChipRow}
+          >
+            {user!.addresses.map((saved) => {
+              const selected = selectedAddressLabel === saved.label;
+              return (
+                <Pressable
+                  key={saved.label}
+                  onPress={() => selectAddress(saved)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  style={[styles.addressChip, selected && styles.addressChipSelected]}
+                >
+                  <Text
+                    style={[styles.addressChipText, selected && styles.addressChipTextSelected]}
+                  >
+                    {saved.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
 
         <Pressable
           onPress={useCurrentLocation}
@@ -222,14 +309,14 @@ export default function CheckoutScreen() {
         <Field
           label="Flat, building and street"
           value={line1}
-          onChangeText={setLine1}
+          onChangeText={(t) => { setLine1(t); setSelectedAddressLabel(null); }}
           placeholder="12-3-45, Rose Villa, Banjara Hills"
           autoComplete="street-address"
         />
         <Field
           label="Landmark (optional)"
           value={landmark}
-          onChangeText={setLandmark}
+          onChangeText={(t) => { setLandmark(t); setSelectedAddressLabel(null); }}
           placeholder="Opposite the temple"
         />
         <Field
@@ -356,6 +443,18 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { padding: space.lg, gap: space.md, paddingBottom: space.xxl },
   sectionGap: { marginTop: space.md },
+  addressChipRow: { gap: space.sm, paddingBottom: space.xs },
+  addressChip: {
+    backgroundColor: color.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.line,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+  },
+  addressChipSelected: { backgroundColor: color.primarySoft, borderColor: color.primary },
+  addressChipText: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.ink },
+  addressChipTextSelected: { color: color.primary },
   locationButton: {
     backgroundColor: color.leafSoft,
     borderRadius: radius.md,

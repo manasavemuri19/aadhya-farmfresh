@@ -1,4 +1,4 @@
-"""Token issuing/verification and one-way hashing.
+"""Token issuing/verification.
 
 Two token types are issued, and they are not interchangeable: a short-lived
 `access` token used as a bearer credential, and a long-lived `refresh` token
@@ -10,35 +10,59 @@ access token.
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from app.core.config import settings
 from app.core.errors import Unauthorized
 
 TokenType = Literal["access", "refresh"]
 
+log = logging.getLogger(__name__)
+
+# AAD-SEC-016: `hash_secret`/`verify_secret` used to live here — Argon2
+# hashing for the old phone/OTP-login subsystem's stored codes. AAD-QUAL-001
+# deleted that whole subsystem (dead, dangerous authentication surface), which
+# left these two functions with zero callers anywhere in the app or the tests.
+# Reintroduced for AAD-SEC-027 (in-app delivery-verification OTP), following
+# the reintroduction guidance that finding's own deletion comment left
+# behind: catch Argon2's own exception types specifically rather than a bare
+# `except Exception`, and call `check_needs_rehash()` on every successful
+# verify so parameters can be upgraded later without a forced re-hash
+# migration. A single module-level `PasswordHasher()` is reused across calls
+# — it's stateless aside from its (fixed, config-derived) hashing
+# parameters, so there's nothing per-call to isolate.
 _hasher = PasswordHasher()
-
-
-def hash_secret(raw: str) -> str:
-    """Hash an OTP or password. Never store either in plaintext."""
-    return _hasher.hash(raw)
-
-
-def verify_secret(hashed: str, raw: str) -> bool:
-    try:
-        return _hasher.verify(hashed, raw)
-    except (VerifyMismatchError, Exception):  # noqa: B014 - argon2 raises several types
-        return False
 
 
 def constant_time_equals(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
+
+
+def hash_secret(secret: str) -> str:
+    """Argon2-hash a short-lived secret (e.g. a delivery-verification code)
+    for storage. Never store `secret` itself alongside this — the hash is
+    the only thing verification should ever need to trust."""
+    return _hasher.hash(secret)
+
+
+def verify_secret(secret: str, hashed: str) -> bool:
+    """True iff `secret` matches the Argon2 hash previously produced by
+    `hash_secret`. `InvalidHashError` covers a malformed/foreign hash value
+    (defensive — nothing in this codebase should ever store one) so this
+    never raises on bad input, only ever returns False."""
+    try:
+        _hasher.verify(hashed, secret)
+    except (VerifyMismatchError, InvalidHashError):
+        return False
+    if _hasher.check_needs_rehash(hashed):
+        log.info("secret_hash_needs_rehash")
+    return True
 
 
 def _issue(subject: str, token_type: TokenType, ttl: timedelta, **claims: Any) -> str:

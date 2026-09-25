@@ -38,6 +38,16 @@ class QuoteLine(Schema):
     # Populated when the requested quantity had to be reduced or dropped.
     adjusted_from_qty: int | None = None
     unavailable_reason: str | None = None
+    # AAD-QUAL-013: how many of this SKU can be sold right now, always
+    # present (0 when unavailable) — a client can enforce this as the
+    # quantity stepper's ceiling instead of finding out only at checkout.
+    max_qty: int = 0
+    # AAD-QUAL-013: why qty is below what was requested, when it is, and the
+    # line is still otherwise sellable — "out_of_stock" (fewer remain than
+    # asked) or "quantity_limit" (stock is fine; the per-order cap bound).
+    # Distinct from unavailable_reason, which only describes a line that
+    # cannot be sold at all.
+    adjustment_reason: str | None = None
 
 
 class Quote(Schema):
@@ -46,7 +56,6 @@ class Quote(Schema):
     lines: list[QuoteLine]
     subtotal_paise: int
     delivery_fee_paise: int
-    discount_paise: int = 0
     total_paise: int
     currency: str = "INR"
     free_delivery_threshold_paise: int
@@ -107,7 +116,6 @@ class OrderView(Schema):
     lines: list[OrderLine]
     subtotal_paise: int
     delivery_fee_paise: int
-    discount_paise: int
     total_paise: int
     currency: str
     address: Address
@@ -118,14 +126,23 @@ class OrderView(Schema):
     created_at: datetime
     updated_at: datetime
     can_cancel: bool = False
-    # Same window as can_cancel (CUSTOMER_CANCELLABLE) — once an order is
-    # packed for pickup, changing its destination needs a person, not a form.
+    # Product decision: always False. Self-serve address edits on an
+    # existing order are disabled entirely, at every status — not tied to
+    # can_cancel/CUSTOMER_CANCELLABLE, which is a separate window and
+    # untouched by this. See OrderService.update_address's own docstring.
     can_edit_address: bool = False
     # Only ever populated while status == out_for_delivery AND an agent is
     # assigned — see OrderService._agent_location_if_visible. Deliberately
     # never shown before pickup or after drop-off: there's nothing useful
     # (or appropriate) to say about an agent's location outside that window.
     delivery_agent_location: AgentLocation | None = None
+    # AAD-SEC-027: the in-app proof-of-delivery code, shown only while it's
+    # actually usable — status is out_for_delivery, a code exists, and it
+    # hasn't expired (see OrderService._to_view). Never populated for a
+    # delivery agent's own view of the order (DeliveryOrderView is a
+    # deliberately separate, narrower schema that never includes this) —
+    # only the customer who's meant to read it out loud sees it.
+    delivery_code: str | None = None
 
 
 class CancelOrderRequest(Schema):
@@ -139,6 +156,26 @@ class UpdateOrderStatusRequest(Schema):
 
 class UpdateOrderAddressRequest(Schema):
     address: Address
+
+
+class SetAvailabilityRequest(Schema):
+    """AAD-API-007: `set_availability` declared `active: bool` with no
+    annotation, so FastAPI bound it as a **query parameter** on a `POST` —
+    the only route in the codebase shaped that way. A state change belongs
+    in the body, like every other mutation here."""
+
+    active: bool
+
+
+class MockCompletePayment(Schema):
+    """AAD-QUAL-024: `/payments/mock/complete` took `body: dict` — the one
+    endpoint in the codebase with an untyped body — and read `order_id` off
+    it with `.get()`, raising a `NotFound` for a missing field instead of
+    the 422 a schema gives for free. Mock-only, so this was always low
+    impact, but there's no reason for it to be the exception."""
+
+    order_id: str
+    outcome: str = Field(default="success", pattern="^(success|failure)$")
 
 
 # AAD-API-006: a ceiling on any single stock quantity or adjustment — far

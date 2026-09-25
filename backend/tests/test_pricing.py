@@ -35,16 +35,47 @@ def test_line_total_is_unit_price_times_quantity():
 
 
 def test_quantity_clamps_to_available_stock():
-    v = make_variant(stock_qty=2)
+    v = make_variant(stock_qty=2, max_per_order=10)
     line = price_line(make_product([v]), v, 5)
     assert line.qty == 2
     assert line.adjusted_from_qty == 5
+    # AAD-QUAL-013: a genuine partial stock shortage — distinct from being
+    # over the per-order limit — and still fully sellable at the reduced qty.
+    assert line.adjustment_reason == "out_of_stock"
+    assert line.unavailable_reason is None
+    assert line.max_qty == 2
+    assert line.is_sellable
 
 
 def test_quantity_clamps_to_max_per_order():
     v = make_variant(stock_qty=100, max_per_order=4)
     line = price_line(make_product([v]), v, 9)
     assert line.qty == 4
+    # AAD-QUAL-013: plenty of stock — the per-order cap is what actually
+    # bound, and the customer asking for 9 should be told that, not "ran
+    # out". Still fully sellable at the reduced qty.
+    assert line.adjustment_reason == "quantity_limit"
+    assert line.unavailable_reason is None
+    assert line.max_qty == 4
+    assert line.is_sellable
+
+
+def test_quantity_clamp_reason_is_out_of_stock_when_stock_is_the_tighter_bound():
+    """Stock below the per-order cap is the honest explanation even though
+    the cap also technically applies — AAD-QUAL-013 asks for the reason the
+    customer can actually act on."""
+    v = make_variant(stock_qty=3, max_per_order=10)
+    line = price_line(make_product([v]), v, 3 + 1)
+    assert line.qty == 3
+    assert line.adjustment_reason == "out_of_stock"
+
+
+def test_unclamped_line_has_no_adjustment_reason_but_reports_max_qty():
+    v = make_variant(stock_qty=10, max_per_order=10)
+    line = price_line(make_product([v]), v, 3)
+    assert line.adjusted_from_qty is None
+    assert line.adjustment_reason is None
+    assert line.max_qty == 10
 
 
 def test_out_of_stock_line_is_not_sellable():

@@ -13,6 +13,7 @@ from app.schemas.delivery import (
     DeliveryOrderView,
     DeliveryRequestView,
     UpdateDeliveryStatusRequest,
+    VerifyDeliveryCodeRequest,
 )
 from app.services.delivery_service import DeliveryService
 
@@ -60,6 +61,18 @@ async def update_delivery_status(
     status change, just entered from the agent's app instead of staff's.
     """
     return await svc.update_status(order_id, agent.user_id, body.status, body.note)
+
+
+@router.post("/orders/{order_id}/verify-delivery", response_model=DeliveryOrderView)
+async def verify_delivery(
+    order_id: str, body: VerifyDeliveryCodeRequest, agent: DeliveryAgentUser, svc: Delivery
+) -> DeliveryOrderView:
+    """AAD-SEC-027: enter the customer's in-app delivery code to mark an
+    order Delivered — the only route to that status left on this router
+    (see DeliveryService's own _AGENT_ALLOWED_STATUSES comment). A wrong
+    code returns 409 with attempts remaining, not a generic error, so the
+    agent's app can show that directly."""
+    return await svc.verify_delivery(order_id, agent.user_id, body.code)
 
 
 @router.post("/location", status_code=204)

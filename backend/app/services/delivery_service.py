@@ -35,18 +35,17 @@ _MAX_CONCURRENT_ORDERS = 5
 
 log = logging.getLogger(__name__)
 
-# The only statuses an agent can move an order into themselves. Confirming
-# (that's payment), cancelling and refunding stay staff/admin-only via
-# /admin/orders/{id}/status — an agent's whole write surface on an order's
-# status is "I packed it, I'm carrying it, I dropped it off."
-_AGENT_ALLOWED_STATUSES = frozenset(
-    {OrderStatus.PACKED, OrderStatus.OUT_FOR_DELIVERY, OrderStatus.DELIVERED}
-)
+# The only statuses an agent can move an order into themselves via the plain
+# status endpoint. Confirming (that's payment), cancelling and refunding
+# stay staff/admin-only via /admin/orders/{id}/status. AAD-SEC-027: DELIVERED
+# was removed from here — an agent can no longer self-report delivery with
+# no evidence; it's reached only through verify_delivery below (entering the
+# customer's in-app code), or by a staff override through /admin.
+_AGENT_ALLOWED_STATUSES = frozenset({OrderStatus.PACKED, OrderStatus.OUT_FOR_DELIVERY})
 
 _DEFAULT_STATUS_NOTE: dict[OrderStatus, str] = {
     OrderStatus.PACKED: "Packed by delivery agent",
     OrderStatus.OUT_FOR_DELIVERY: "Picked up, on the way",
-    OrderStatus.DELIVERED: "Delivered",
 }
 
 
@@ -63,42 +62,58 @@ class DeliveryService:
         not-yet-taken order here, so it deliberately returns the lean
         DeliveryRequestView (no address, no notes, no order value) rather
         than the full DeliveryOrderView. An agent gets the full picture only
-        for orders they've actually accepted (list_ongoing, accept)."""
-        candidates = await self.deliveries.list_new_requests()
+        for orders they've actually accepted (list_ongoing, accept).
+
+        AAD-PERF-012: used to load every pending order (up to the hard
+        `limit=100`) unconditionally, then do all the radius filtering and
+        widening in Python over that fully materialised list — a load-then-
+        discard on every single poll, from every agent, whether or not
+        anything was actually near them. `list_new_requests`'s own `near`
+        parameter now does the coarse filtering in SQL (a cheap bounding
+        box), so each radius step only loads the orders that could
+        plausibly be in range at that radius, plus whatever has no
+        coordinates at all (those always need to be seen regardless of
+        radius — see the loop below). `haversine_km` still does the exact
+        distance check and the final sort; the box is only ever a filter,
+        never the answer.
+        """
         agent_location = await self.users.get_agent_location(agent_id)
 
-        located: list[tuple[dict, float]] = []
-        unlocated: list[dict] = []
-        for order in candidates:
-            lat = order["address"].get("latitude")
-            lng = order["address"].get("longitude")
-            if agent_location is not None and lat is not None and lng is not None:
-                distance = haversine_km(*agent_location, lat, lng)
-                located.append((order, distance))
-            else:
-                # Either the agent hasn't shared a location yet, or this
-                # particular order's address has no coordinates on it (an
-                # old order, or a hand-typed address). Either way there's
-                # nothing to measure against — see _UNLOCATED_FALLBACK_LIMIT
-                # for how this no-longer goes out completely unfiltered.
-                unlocated.append(order)
-        located.sort(key=lambda pair: pair[1])
-
-        if agent_location is not None:
-            radius = _START_RADIUS_KM
-            within = [pair for pair in located if pair[1] <= radius]
-            while not within and located and radius < _MAX_RADIUS_KM:
-                radius += _RADIUS_STEP_KM
-                within = [pair for pair in located if pair[1] <= radius]
-            located = within
+        if agent_location is None:
+            # Nothing to measure distance against — same fallback as
+            # before: oldest-first, capped, no radius logic at all.
+            candidates = await self.deliveries.list_new_requests()
+            unlocated = candidates[:_UNLOCATED_FALLBACK_LIMIT]
+            ordered: list[tuple[dict, float | None]] = [(order, None) for order in unlocated]
         else:
-            # list_new_requests already orders oldest-first; take the cap
-            # off the front rather than an arbitrary slice.
-            unlocated = unlocated[:_UNLOCATED_FALLBACK_LIMIT]
+            lat, lng = agent_location
+            located: list[tuple[dict, float]] = []
+            unlocated_by_id: dict[str, dict] = {}
+            radius = _START_RADIUS_KM
+            while True:
+                candidates = await self.deliveries.list_new_requests(near=(lat, lng, radius))
+                located = []
+                for order in candidates:
+                    o_lat = order["address"].get("latitude")
+                    o_lng = order["address"].get("longitude")
+                    if o_lat is None or o_lng is None:
+                        # However this order's own coordinates look, it's
+                        # in every widening step's result set (the `near`
+                        # filter always passes coordinate-less orders
+                        # through) — collect it once, not once per radius.
+                        unlocated_by_id[order["id"]] = order
+                        continue
+                    distance = haversine_km(lat, lng, o_lat, o_lng)
+                    if distance <= radius:
+                        located.append((order, distance))
+                if located or radius >= _MAX_RADIUS_KM:
+                    break
+                radius += _RADIUS_STEP_KM
+            located.sort(key=lambda pair: pair[1])
 
-        ordered: list[tuple[dict, float | None]] = [
-            (order, distance) for order, distance in located
-        ] + [(order, None) for order in unlocated]
+            ordered = [(order, distance) for order, distance in located] + [
+                (order, None) for order in unlocated_by_id.values()
+            ]
 
         # DeliveryRequestView is deliberately narrower than the dict
         # list_new_requests returns (Schema forbids extra fields, so the
@@ -202,6 +217,18 @@ class DeliveryService:
         (including the legal-sequence check — no jumping straight to
         Delivered from Confirmed) is delegated to OrderService, which is
         already the one place that logic lives.
+
+        AAD-PERF-013: used to re-read this same order a third time, via
+        `deliveries.get_one`, purely to build the response — on top of the
+        `existing` read just above and whatever `OrderService.update_status`
+        itself reads internally (a pre-transition read and a post-
+        transition one). `OrderService.update_status` already returns a
+        full `OrderView` of the very row this just changed; that's reused
+        directly to build the `DeliveryOrderView` instead of asking the
+        database for the same order a third time. `delivery_assigned_at`
+        isn't on `OrderView` at all (it's an agent-assignment detail, not a
+        customer-facing one) — a plain status transition never touches it,
+        so the value already in hand from `existing` is still correct.
         """
         if new_status not in _AGENT_ALLOWED_STATUSES:
             raise Forbidden(
@@ -212,16 +239,57 @@ class DeliveryService:
         if existing is None:
             raise Forbidden("This order isn't assigned to you.")
 
-        await self.orders.update_status(
+        updated_view = await self.orders.update_status(
             order_id=order_id,
             new_status=new_status,
             note=note or _DEFAULT_STATUS_NOTE[new_status],
             actor=agent_id,
         )
 
-        updated = await self.deliveries.get_one(order_id, agent_id)
-        assert updated is not None
-        return DeliveryOrderView(distance_km=None, **updated)
+        return DeliveryOrderView(
+            id=updated_view.id,
+            order_number=updated_view.order_number,
+            status=updated_view.status.value,
+            address=updated_view.address,
+            notes=updated_view.notes,
+            total_paise=updated_view.total_paise,
+            item_count=sum(line.qty for line in updated_view.lines),
+            created_at=updated_view.created_at,
+            delivery_assigned_at=existing["delivery_assigned_at"],
+            distance_km=None,
+        )
+
+    async def verify_delivery(
+        self, order_id: str, agent_id: str, code: str
+    ) -> DeliveryOrderView:
+        """AAD-SEC-027: the agent-facing half of in-app proof-of-delivery —
+        the only way an order still assigned to an agent reaches DELIVERED
+        through this router (see _AGENT_ALLOWED_STATUSES' own comment).
+
+        Same ownership check as update_status, and for the same reason: a
+        wrong-order guess or a stolen agent session shouldn't be able to
+        probe another agent's delivery codes by order id alone.
+        """
+        existing = await self.deliveries.get_one(order_id, agent_id)
+        if existing is None:
+            raise Forbidden("This order isn't assigned to you.")
+
+        updated_view = await self.orders.verify_delivery_code(
+            order_id=order_id, code=code, actor=agent_id
+        )
+
+        return DeliveryOrderView(
+            id=updated_view.id,
+            order_number=updated_view.order_number,
+            status=updated_view.status.value,
+            address=updated_view.address,
+            notes=updated_view.notes,
+            total_paise=updated_view.total_paise,
+            item_count=sum(line.qty for line in updated_view.lines),
+            created_at=updated_view.created_at,
+            delivery_assigned_at=existing["delivery_assigned_at"],
+            distance_km=None,
+        )
 
     async def update_location(self, agent_id: str, *, latitude: float, longitude: float) -> None:
         await self.users.update_agent_location(agent_id, latitude=latitude, longitude=longitude)

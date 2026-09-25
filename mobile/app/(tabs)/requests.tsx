@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, AppState, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import type { AppStateStatus } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Location from 'expo-location';
@@ -7,6 +8,7 @@ import * as Location from 'expo-location';
 import { Text } from '../../src/components/Text';
 import { Button } from '../../src/components/Button';
 import { EmptyState, ErrorState, Loading } from '../../src/components/Feedback';
+import { VerifyDeliveryModal } from '../../src/components/VerifyDeliveryModal';
 import { deliveryApi } from '../../src/api/endpoints';
 import { ApiError } from '../../src/api/client';
 import { formatPaise } from '../../src/lib/money';
@@ -24,17 +26,30 @@ const ONGOING_LABEL: Partial<Record<OrderStatus, string>> = {
 // entry here because once it's set the order leaves the ongoing list
 // entirely (see DeliveryRepository's _ONGOING_STATUSES), so there's nothing
 // further to advance it to from this screen.
-const NEXT_STATUS: Partial<Record<OrderStatus, { status: OrderStatus; label: string }>> = {
+//
+// AAD-SEC-027: out_for_delivery's target is no longer reachable through the
+// plain status endpoint at all (updateStatus below 409s on 'delivered' —
+// the backend only accepts it from verify-delivery) — `requiresCode` marks
+// that one entry so the button below opens VerifyDeliveryModal instead of
+// calling advanceStatus directly.
+const NEXT_STATUS: Partial<
+  Record<OrderStatus, { status: OrderStatus; label: string; requiresCode?: boolean }>
+> = {
   confirmed: { status: 'packed', label: 'Mark as packed' },
   packed: { status: 'out_for_delivery', label: 'Start delivery' },
-  out_for_delivery: { status: 'delivered', label: 'Mark delivered' },
+  out_for_delivery: { status: 'delivered', label: 'Mark delivered', requiresCode: true },
 };
 
-// How often the device's GPS gets re-read and pushed to the backend while
-// this tab is open. Matching requests.tsx's own poll interval below keeps
-// "how far is this from me" reasonably fresh without hammering either the
-// device's location hardware or the network.
+// AAD-MOB-012: the ceiling on how often a report is sent while the agent is
+// actually moving, and the minimum distance that counts as "moved" at all —
+// passed to watchPositionAsync as timeInterval/distanceInterval so the OS
+// itself batches and dedupes reads instead of this screen polling on a
+// fixed timer regardless of whether anything changed. Matching
+// REQUESTS_POLL_INTERVAL_MS below keeps "how far is this from me" reasonably
+// fresh without hammering either the device's location hardware or the
+// network.
 const LOCATION_REPORT_INTERVAL_MS = 60_000;
+const LOCATION_DISTANCE_FILTER_M = 50;
 const REQUESTS_POLL_INTERVAL_MS = 15_000;
 
 /**
@@ -65,44 +80,22 @@ export default function RequestsScreen() {
   const [releasingId, setReleasingId] = useState<string | null>(null);
   const [advancingId, setAdvancingId] = useState<string | null>(null);
   const [ongoingActionError, setOngoingActionError] = useState<string | null>(null);
+  // AAD-SEC-027: which order the code-entry sheet is open for, if any —
+  // VerifyDeliveryModal itself owns the code field, submit state and error
+  // display; this screen only needs to know whether to render it.
+  const [verifyingOrder, setVerifyingOrder] = useState<DeliveryOrderView | null>(null);
   const reportedOnce = useRef(false);
+  // AAD-MOB-012: whether the app is actually in the foreground right now —
+  // GPS reporting below stops the instant it isn't, rather than continuing
+  // for as long as this tab merely stays mounted (which, in a tab
+  // navigator, is essentially the whole shift).
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
 
-  // Ask for and periodically report GPS position — this is what lets the
-  // backend judge distance at all. No permission or a denial just means
-  // every request shows up unfiltered ("distance unknown"), never that the
-  // tab breaks or a paid order goes unseen.
   useEffect(() => {
-    let cancelled = false;
-    let interval: ReturnType<typeof setInterval>;
-
-    const reportOnce = async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          if (!cancelled) setLocationDenied(true);
-          return;
-        }
-        const position = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        if (cancelled) return;
-        setLocationDenied(false);
-        reportedOnce.current = true;
-        await deliveryApi.reportLocation(position.coords.latitude, position.coords.longitude);
-        if (!cancelled) void queryClient.invalidateQueries({ queryKey: ['delivery', 'requests'] });
-      } catch {
-        // A single failed read/report isn't fatal — the next interval tick
-        // tries again, and until one succeeds requests just show unfiltered.
-      }
-    };
-
-    void reportOnce();
-    interval = setInterval(() => void reportOnce(), LOCATION_REPORT_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const subscription = AppState.addEventListener('change', (next: AppStateStatus) => {
+      setAppActive(next === 'active');
+    });
+    return () => subscription.remove();
   }, []);
 
   const ongoing = useQuery({
@@ -116,6 +109,67 @@ export default function RequestsScreen() {
     queryFn: () => deliveryApi.listRequests(),
     refetchInterval: REQUESTS_POLL_INTERVAL_MS,
   });
+
+  // AAD-MOB-012: this used to run for the whole time the Requests tab was
+  // mounted — foregrounded or not, deliveries in hand or not — making GPS,
+  // the single largest discretionary battery draw on the phone, run
+  // continuously for an entire shift, including after the agent was done
+  // for the day. It's now on only while there's an active delivery to
+  // route by *and* the app is actually in the foreground, and it uses
+  // watchPositionAsync's own distance filter instead of a fixed-interval
+  // poll, so the OS can skip reporting a stationary agent altogether.
+  const hasActiveDeliveries = (ongoing.data?.length ?? 0) > 0;
+
+  useEffect(() => {
+    if (!hasActiveDeliveries || !appActive) return;
+
+    let cancelled = false;
+    let subscription: Location.LocationSubscription | undefined;
+
+    const start = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (cancelled) return;
+      if (status !== 'granted') {
+        setLocationDenied(true);
+        return;
+      }
+      setLocationDenied(false);
+      try {
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: LOCATION_REPORT_INTERVAL_MS,
+            distanceInterval: LOCATION_DISTANCE_FILTER_M,
+          },
+          (position) => {
+            if (cancelled) return;
+            reportedOnce.current = true;
+            deliveryApi
+              .reportLocation(position.coords.latitude, position.coords.longitude)
+              .then(() => {
+                if (!cancelled) {
+                  void queryClient.invalidateQueries({ queryKey: ['delivery', 'requests'] });
+                }
+              })
+              .catch(() => {
+                // A single failed report isn't fatal — watchPositionAsync
+                // keeps delivering ticks; the next one tries again.
+              });
+          },
+        );
+      } catch {
+        // Starting the watch itself failed (e.g. location services off at
+        // the OS level) — nothing further to do until the next mount/state
+        // change re-attempts it.
+      }
+    };
+
+    void start();
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
+  }, [hasActiveDeliveries, appActive, queryClient]);
 
   const accept = async (order: DeliveryOrderView) => {
     setAcceptError(null);
@@ -192,10 +246,7 @@ export default function RequestsScreen() {
   if (ongoing.isPending || requests.isPending) return <Loading label="Loading requests" />;
   if (requests.isError) {
     return (
-      <ErrorState
-        message={requests.error instanceof Error ? requests.error.message : 'Try again.'}
-        onRetry={() => void requests.refetch()}
-      />
+      <ErrorState error={requests.error} onRetry={() => void requests.refetch()} />
     );
   }
 
@@ -203,6 +254,7 @@ export default function RequestsScreen() {
   const requestsList = (requests.data ?? []).filter((o: DeliveryOrderView) => !dismissedIds.has(o.id));
 
   return (
+    <>
     <FlatList
       style={styles.screen}
       contentContainerStyle={[styles.content, { paddingTop: insets.top + space.lg }]}
@@ -217,6 +269,15 @@ export default function RequestsScreen() {
               <Text variant="caption" style={styles.locationNoticeText}>
                 Location isn't shared yet, so requests below aren't sorted by distance. You can
                 allow location access for this app in your phone's settings.
+              </Text>
+            </View>
+          )}
+
+          {!locationDenied && !hasActiveDeliveries && (
+            <View style={styles.locationNotice}>
+              <Text variant="caption" style={styles.locationNoticeText}>
+                Location sharing is paused, so requests below are not sorted by distance. It
+                resumes automatically once you accept a delivery.
               </Text>
             </View>
           )}
@@ -257,7 +318,11 @@ export default function RequestsScreen() {
                         )}
                         {next && (
                           <Pressable
-                            onPress={() => void advanceStatus(order)}
+                            onPress={() =>
+                              next.requiresCode
+                                ? setVerifyingOrder(order)
+                                : void advanceStatus(order)
+                            }
                             disabled={busy}
                             accessibilityRole="button"
                             accessibilityLabel={`${next.label}, order ${order.order_number}`}
@@ -311,6 +376,15 @@ export default function RequestsScreen() {
         />
       }
     />
+    <VerifyDeliveryModal
+      order={verifyingOrder}
+      onVerified={() => {
+        setVerifyingOrder(null);
+        void queryClient.invalidateQueries({ queryKey: ['delivery', 'ongoing'] });
+      }}
+      onClose={() => setVerifyingOrder(null)}
+    />
+    </>
   );
 }
 

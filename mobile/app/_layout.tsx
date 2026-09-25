@@ -62,7 +62,7 @@ function isProfileComplete(user: { name: string; phone: string | null; addresses
 }
 
 export default function RootLayout() {
-  const { status, user, restore } = useSession();
+  const { status, user, degradedError, restore } = useSession();
   const [fontsLoaded, fontError] = useFonts({
     Fraunces_600SemiBold, Fraunces_700Bold,
     DMSans_400Regular, DMSans_500Medium, DMSans_700Bold,
@@ -121,12 +121,10 @@ export default function RootLayout() {
           // nothing about whether the session is still valid — a dropped
           // packet, a timeout, a cold-starting backend, a 500. Tokens were
           // kept (see session.ts's restore()); this is a retry, not a
-          // re-login.
-          <ErrorState
-            title="Couldn't reach the server"
-            message="Check your connection and try again. You're still signed in."
-            onRetry={() => void restore()}
-          />
+          // re-login. AAD-MOB-026: message now comes from the same shared
+          // two-bucket split every other failed screen uses, since restore()
+          // can land here for either reason (see its own comment).
+          <ErrorState error={degradedError} onRetry={() => void restore()} />
         ) : !isProfileComplete(user) ? (
           <CompleteProfileScreen />
         ) : (
@@ -148,6 +146,8 @@ export default function RootLayout() {
             <Stack.Screen name="order/[id]" options={{ title: 'Order' }} />
             <Stack.Screen name="order-edit-address" options={{ title: 'Delivery address' }} />
             <Stack.Screen name="edit-details" options={{ title: 'Edit details' }} />
+            <Stack.Screen name="addresses" options={{ title: 'Saved addresses' }} />
+            <Stack.Screen name="address-edit" options={{ title: 'Address' }} />
             <Stack.Screen name="help-support" options={{ title: 'Help & Support' }} />
           </Stack>
         )}

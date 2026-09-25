@@ -1,7 +1,7 @@
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 
 import { Text } from '../src/components/Text';
 import { EmptyState, ErrorState, Loading } from '../src/components/Feedback';
@@ -23,22 +23,28 @@ const LABEL: Record<OrderStatus, string> = {
 export default function OrdersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const orders = useQuery({
+  // AAD-API-004: a customer used to be physically unable to see past their
+  // 20 most recent orders — GET /orders exposed a limit but never the
+  // cursor the repository already supported. This screen now walks that
+  // cursor with react-query's own pagination primitive rather than
+  // fetching everything at once.
+  const orders = useInfiniteQuery({
     queryKey: ['orders'],
-    queryFn: () => ordersApi.list(),
+    queryFn: ({ pageParam }: { pageParam?: string }) => ordersApi.list(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined),
   });
 
   if (orders.isPending) return <Loading />;
   if (orders.isError) {
     return (
-      <ErrorState
-        message={orders.error instanceof Error ? orders.error.message : 'Try again.'}
-        onRetry={() => void orders.refetch()}
-      />
+      <ErrorState error={orders.error} onRetry={() => void orders.refetch()} />
     );
   }
 
-  if (orders.data.length === 0) {
+  const items = orders.data.pages.flatMap((page) => page.items);
+
+  if (items.length === 0) {
     return (
       <EmptyState
         title="No orders yet"
@@ -53,11 +59,20 @@ export default function OrdersScreen() {
     <FlatList
       style={styles.screen}
       contentContainerStyle={[styles.list, { paddingTop: insets.top + space.lg }]}
-      data={orders.data}
+      data={items}
       keyExtractor={(order) => order.id}
       ListHeaderComponent={<Text variant="display" style={styles.heading}>Orders</Text>}
-      refreshing={orders.isRefetching}
+      refreshing={orders.isRefetching && !orders.isFetchingNextPage}
       onRefresh={() => void orders.refetch()}
+      onEndReachedThreshold={0.4}
+      onEndReached={() => {
+        if (orders.hasNextPage && !orders.isFetchingNextPage) void orders.fetchNextPage();
+      }}
+      ListFooterComponent={
+        orders.isFetchingNextPage ? (
+          <ActivityIndicator style={styles.footerSpinner} color={color.leaf} />
+        ) : null
+      }
       renderItem={({ item }: { item: OrderView }) => (
         <Pressable
           onPress={() => router.push(`/order/${item.id}`)}
@@ -101,4 +116,5 @@ const styles = StyleSheet.create({
   rowEnd: { alignItems: 'flex-end', gap: 2 },
   amount: { fontSize: size.base },
   status: { fontFamily: font.bodyMedium, fontSize: size.xs, color: color.leaf },
+  footerSpinner: { marginVertical: space.lg },
 });

@@ -65,5 +65,10 @@ async def test_release_returns_stock_to_the_shelf(products, milk):
 
 
 async def test_adjust_stock_cannot_go_negative(products, milk):
-    assert await products.adjust_stock("MILK-COW-1L", -10) is False
+    # AAD-API-005: adjust_stock now returns (bool, reason) rather than a
+    # plain bool — see test_stock_admin_integrity.py for coverage of each
+    # distinct failure reason.
+    ok, failure = await products.adjust_stock("MILK-COW-1L", -10)
+    assert ok is False
+    assert failure == "insufficient_stock"
     assert await _stock(products, "MILK-COW-1L") == 5

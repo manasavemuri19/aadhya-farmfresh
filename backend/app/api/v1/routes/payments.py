@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from fastapi.responses import RedirectResponse
-from urllib.parse import urlencode
 
 from app.api.deps import CurrentUser, get_order_repo, get_order_service
 from app.api.route import TransactionalRoute
@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.errors import NotFound, PaymentFailed, UpstreamError, ValidationError
 from app.payments import PaymentProvider, get_payment_provider
 from app.repositories.orders import OrderRepository
-from app.schemas.order import OrderView
+from app.schemas.order import MockCompletePayment, OrderView
 from app.services.order_service import OrderService
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,19 @@ async def webhook(
     stops retrying instead of hammering us.
     """
     raw = await request.body()
-    signature = x_razorpay_signature or x_mock_signature or ""
+    # AAD-SEC-024: this used to `or` both headers together
+    # (`x_razorpay_signature or x_mock_signature or ""`), so the mock
+    # signature header was accepted on this route regardless of which
+    # provider is actually configured. `RazorpayProvider.parse_webhook`
+    # still HMACs against the real webhook secret, so a mock signature
+    # value fails closed today — but that's incidental to *this* code, not
+    # guaranteed by it, and test-only plumbing sitting unconditionally on
+    # the money path is exactly the kind of thing a later refactor turns
+    # into a real bypass. Selected explicitly by the configured provider
+    # instead.
+    signature = (
+        x_mock_signature if settings.payment_provider == "mock" else x_razorpay_signature
+    ) or ""
 
     try:
         # AAD-PAY-009: Razorpay's own event id arrives in this header, not
@@ -84,9 +96,13 @@ async def mock_sign(
     a gateway account. Absent whenever the real provider is configured."""
     if settings.payment_provider != "mock":
         raise NotFound("Not available.")
-    from app.payments.mock import MockPaymentProvider
 
-    assert isinstance(payments, MockPaymentProvider)
+    # AAD-QUAL-022: previously `assert isinstance(payments, MockPaymentProvider)`
+    # just to satisfy the type checker before calling a mock-only method —
+    # `sign_for_testing` now lives on `PaymentProvider` itself (see base.py),
+    # so this route no longer needs to know the concrete class at all. The
+    # `settings.payment_provider != "mock"` check above is what actually
+    # guarantees this is the mock provider.
     return {
         "signature": payments.sign_for_testing(provider_order_id, provider_payment_id)
     }
@@ -94,7 +110,11 @@ async def mock_sign(
 
 @router.post("/mock/complete", response_model=OrderView, include_in_schema=False)
 async def mock_complete_payment(
-    body: dict, principal: CurrentUser, svc: Orders, orders: OrderRepo, payments: Payments
+    body: MockCompletePayment,
+    principal: CurrentUser,
+    svc: Orders,
+    orders: OrderRepo,
+    payments: Payments,
 ) -> OrderView:
     """Local-only stand-in for the gateway's webhook.
 
@@ -109,16 +129,21 @@ async def mock_complete_payment(
 
     Absent whenever a real provider is configured — this is not a route a
     production build ever exposes.
+
+    AAD-QUAL-024: this used to take `body: dict` — the one endpoint in the
+    codebase with an untyped body — and read `order_id` with `.get()`,
+    raising `NotFound` for a missing field where every other route in this
+    app gets a 422 from FastAPI/pydantic for free. `MockCompletePayment`
+    closes that gap; `outcome` is now constrained to the only two values
+    this handler ever actually branches on.
     """
     if settings.payment_provider != "mock":
         raise NotFound("Not available.")
-    from app.payments.base import WebhookEvent
     from app.core.ids import new_id
+    from app.payments.base import WebhookEvent
 
-    order_id = body.get("order_id")
-    outcome = body.get("outcome", "success")
-    if not order_id:
-        raise NotFound("order_id is required.")
+    order_id = body.order_id
+    outcome = body.outcome
 
     order = await svc.get_for_user(order_id, principal.user_id)
     provider_order_id = order.payment.provider_order_id
@@ -231,9 +256,11 @@ async def payment_link_callback(
     """
     if settings.payment_provider != "razorpay":
         raise NotFound("Not available.")
-    from app.payments.razorpay import RazorpayProvider
 
-    assert isinstance(payments, RazorpayProvider)
+    # AAD-QUAL-022: same fix as mock_sign above — verify_payment_link_callback
+    # lives on PaymentProvider itself now, so no isinstance narrowing is
+    # needed to call it. settings.payment_provider == "razorpay" above is
+    # the real guarantee.
     ok = payments.verify_payment_link_callback(
         payment_link_id=razorpay_payment_link_id,
         payment_link_reference_id=razorpay_payment_link_reference_id,

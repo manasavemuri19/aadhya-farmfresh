@@ -12,12 +12,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Order as OrderRow
 from app.domain.enums import OrderStatus
+from app.domain.geo import bounding_box_km
 
 # Delivered/cancelled/refunded orders are done, from an agent's point of
 # view, whether or not they were the one who delivered it.
@@ -51,17 +52,47 @@ class DeliveryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_new_requests(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    async def list_new_requests(
+        self, *, limit: int = 100, near: tuple[float, float, float] | None = None
+    ) -> list[dict[str, Any]]:
         """Paid, unassigned, ready for someone to accept. Oldest first — the
         order that's been waiting longest gets first crack at any agent who
-        opens the app, not just whichever happens to be nearest."""
+        opens the app, not just whichever happens to be nearest.
+
+        AAD-PERF-012: `near`, when given, is `(lat, lng, radius_km)` — the
+        caller's own position and the radius it's currently trying. Without
+        it (an agent with no location shared yet), this loads every
+        candidate, same as always. With it, the WHERE clause adds a cheap
+        bounding-box predicate (`domain.geo.bounding_box_km`) so a request
+        for "what's near me at 2km" doesn't eager-load every pending order
+        in the farm's whole service area just to discard most of them in
+        Python. An order with no coordinates on its address at all always
+        passes the filter regardless of the box — the caller still needs to
+        see those (see `DeliveryService.list_requests`'s own docstring) —
+        and the box itself is a deliberately generous rectangle, not the
+        final answer: the caller re-checks the real distance with
+        `haversine_km` on whatever this returns.
+        """
+        conditions = [
+            OrderRow.status == OrderStatus.CONFIRMED.value,
+            OrderRow.delivery_agent_id.is_(None),
+        ]
+        if near is not None:
+            lat, lng, radius_km = near
+            lat_min, lat_max, lng_min, lng_max = bounding_box_km(lat, lng, radius_km)
+            lat_col = OrderRow.address["latitude"].as_float()
+            lng_col = OrderRow.address["longitude"].as_float()
+            conditions.append(
+                or_(
+                    lat_col.is_(None),
+                    lng_col.is_(None),
+                    and_(lat_col.between(lat_min, lat_max), lng_col.between(lng_min, lng_max)),
+                )
+            )
         stmt = (
             select(OrderRow)
             .options(selectinload(OrderRow.lines))
-            .where(
-                OrderRow.status == OrderStatus.CONFIRMED.value,
-                OrderRow.delivery_agent_id.is_(None),
-            )
+            .where(*conditions)
             .order_by(OrderRow.created_at)
             .limit(limit)
         )

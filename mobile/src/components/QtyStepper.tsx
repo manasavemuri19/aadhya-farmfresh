@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from './Text';
 import { color, font, radius, size } from '../theme/tokens';
@@ -9,7 +10,10 @@ interface Props {
   compact?: boolean;
 }
 
-export function QtyStepper({ qty, max, onChange, compact = false }: Props) {
+// AAD-MOB-014: rendered inside ProductCard, which is now itself memoized —
+// this only pays off if QtyStepper doesn't independently force a re-render
+// whenever its parent card re-renders for an unrelated reason.
+export const QtyStepper = memo(function QtyStepper({ qty, max, onChange, compact = false }: Props) {
   const atMax = qty >= max;
   return (
     <View style={[styles.wrap, compact && styles.wrapCompact]}>
@@ -36,7 +40,7 @@ export function QtyStepper({ qty, max, onChange, compact = false }: Props) {
       </Pressable>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrap: {

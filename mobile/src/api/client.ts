@@ -87,6 +87,20 @@ export class ApiError extends Error {
     this.details = details;
   }
 
+  // AAD-MOB-007: this looked unused on a name-only search of the request
+  // pipeline itself, but it's read from every `useQuery` call in the app —
+  // `app/_layout.tsx`'s QueryClient sets this as the shared default `retry`
+  // predicate (`error.isRetryable && failureCount < 2`), so a 5xx or a
+  // dropped connection gets up to two retries and anything else (a 4xx, a
+  // validation error) doesn't. React Query's own default `retryDelay`
+  // (exponential with jitter, capped at 30s) supplies the backoff half of
+  // that without this file needing to implement one itself. `mutations:
+  // { retry: false }` in the same QueryClient is deliberate, not an
+  // oversight — retrying a POST/PATCH/DELETE automatically risks a second
+  // side effect (a second order, a second stock decrement) for a request
+  // that may have actually succeeded server-side before the response was
+  // lost, which is a materially different risk than retrying an idempotent
+  // GET.
   /** True when retrying the same request could plausibly succeed. */
   get isRetryable(): boolean {
     return this.status >= 500 || this.code === 'network_error';
@@ -191,7 +205,17 @@ async function send<T>(path: string, options: RequestOptions, retrying = false):
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  if (signal) signal.addEventListener('abort', () => controller.abort());
+  // AAD-MOB-005: this used to attach an inline arrow function directly, which
+  // meant it could never be removed — `signal.removeEventListener` needs the
+  // exact same function reference it was added with, and an inline arrow
+  // creates a new one every call. A caller-supplied `signal` routinely
+  // outlives a single `send()` call (React Query hands the same query's
+  // signal to every retry/refetch, and a screen unmounting mid-request is
+  // exactly when this fires), so every request against a long-lived signal
+  // left one more listener attached to it forever, each one closing over its
+  // own now-irrelevant `controller`. Named so it can be torn down below.
+  const onCallerAbort = () => controller.abort();
+  if (signal) signal.addEventListener('abort', onCallerAbort);
 
   let response: Response;
   try {
@@ -212,6 +236,7 @@ async function send<T>(path: string, options: RequestOptions, retrying = false):
     );
   } finally {
     clearTimeout(timeout);
+    if (signal) signal.removeEventListener('abort', onCallerAbort);
   }
 
   // A 401 on an authenticated call means the access token aged out. Refresh
@@ -272,11 +297,38 @@ async function send<T>(path: string, options: RequestOptions, retrying = false):
 }
 
 export const api = {
-  get: <T>(path: string, auth = false) => send<T>(path, { method: 'GET', auth }),
+  // AAD-MOB-006: defaulted to `auth = false` before — every one of this
+  // app's GET endpoints except the three public catalog routes needs a
+  // token, so the default silently matched the minority case. Forgetting to
+  // pass `true` for a new protected endpoint produced a 401 that looked like
+  // a backend bug rather than a one-line client mistake. Flipped so the
+  // common case needs no argument and the rare public endpoint (catalog
+  // list/product/search — browsable before signing in, by design) opts out
+  // explicitly and visibly at each of its three call sites in endpoints.ts.
+  get: <T>(path: string, auth = true) => send<T>(path, { method: 'GET', auth }),
   post: <T>(path: string, body?: unknown, opts: Omit<RequestOptions, 'method' | 'body'> = {}) =>
     send<T>(path, { ...opts, method: 'POST', body }),
   patch: <T>(path: string, body?: unknown, auth = true) =>
     send<T>(path, { method: 'PATCH', body, auth }),
   put: <T>(path: string, body?: unknown, auth = true) =>
     send<T>(path, { method: 'PUT', body, auth }),
+  // AAD-SEC-032: added so sign-out can tell the server to stop delivering
+  // to this device — no existing caller needed a bodiless DELETE before.
+  delete: <T>(path: string, auth = true) => send<T>(path, { method: 'DELETE', auth }),
 };
+
+// AAD-MOB-026 (revised scope — no offline caching, just consistent
+// messaging): every screen used to show its own text for a failed query —
+// the server's own literal error string for one screen, a different
+// hardcoded sentence for another, nothing consistent between them. Collapsed
+// to exactly two messages, chosen by what the person can actually do about
+// it, which is the same thing either way: check their connection, or wait
+// and retry. `ErrorState` (Feedback.tsx) is the one caller; every screen
+// that used to build its own message now just passes the query's `error`
+// through.
+export function describeError(error: unknown): string {
+  if (error instanceof ApiError && (error.code === 'network_error' || error.code === 'timeout')) {
+    return 'No internet connection. Check your connection and try again.';
+  }
+  return 'Something went wrong. Try again.';
+}

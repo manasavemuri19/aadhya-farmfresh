@@ -136,10 +136,7 @@ export default function OrderScreen() {
   if (order.isPending) return <Loading />;
   if (order.isError) {
     return (
-      <ErrorState
-        message={order.error instanceof Error ? order.error.message : 'Try again.'}
-        onRetry={() => void order.refetch()}
-      />
+      <ErrorState error={order.error} onRetry={() => void order.refetch()} />
     );
   }
 
@@ -173,6 +170,22 @@ export default function OrderScreen() {
               </View>
             );
           })}
+        </View>
+      )}
+
+      {/* AAD-SEC-027: in-app proof-of-delivery. Shown only while the backend
+          actually considers the code usable (out_for_delivery, unexpired —
+          see OrderService._delivery_code_if_usable), so this simply follows
+          `data.delivery_code` rather than adding its own status/expiry
+          logic on top. */}
+      {data.delivery_code && (
+        <View style={styles.card}>
+          <Text variant="label" style={styles.cardTitle}>Delivery code</Text>
+          <Text variant="caption">
+            Read this out to your delivery partner when they arrive — it&apos;s how we confirm
+            the order reached you.
+          </Text>
+          <Text style={styles.deliveryCode}>{data.delivery_code}</Text>
         </View>
       )}
 
@@ -299,6 +312,14 @@ const styles = StyleSheet.create({
   trackLabelDone: { color: color.ink, fontFamily: font.bodyMedium },
   card: { backgroundColor: color.card, borderRadius: radius.md, padding: space.lg, gap: space.sm },
   cardTitle: { fontSize: size.base },
+  deliveryCode: {
+    fontFamily: font.monoBold,
+    fontSize: 40,
+    letterSpacing: 10,
+    color: color.ink,
+    textAlign: 'center',
+    marginTop: space.xs,
+  },
   map: { width: '100%', height: 220, borderRadius: radius.md, overflow: 'hidden' },
   editAddressLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.primary, marginTop: 2 },
   line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: space.md },

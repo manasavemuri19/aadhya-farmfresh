@@ -21,9 +21,19 @@ class CatalogService:
         )
 
     async def get_product(self, id_or_slug: str) -> ProductView:
-        product = await self.products.get_by_id(id_or_slug)
-        if product is None:
-            product = await self.products.get_by_slug(id_or_slug)
+        # AAD-PERF-011: this used to always try `get_by_id` first and fall
+        # back to `get_by_slug` on a miss — two queries for the common case,
+        # since a client navigating by slug (a share link, a deep link) is
+        # not also a product id. Product ids are always `prd_<token>`
+        # (`core/ids.py`'s `new_id("prd", ...)`, the only prefix ever used
+        # for a product — confirmed against `scripts/seed.py`, the one
+        # place that mints them); a slug never starts with that, so this
+        # branches on the prefix instead of guessing with two round trips.
+        product = (
+            await self.products.get_by_id(id_or_slug)
+            if id_or_slug.startswith("prd_")
+            else await self.products.get_by_slug(id_or_slug)
+        )
         if product is None or not product.is_active:
             raise NotFound("That product is no longer available.")
         return to_product_view(product)

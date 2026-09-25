@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 
 from app.api.route import TransactionalRoute
-from app.core.config import settings
 from app.db import base as db
 
 # Neither route here writes anything, so TransactionalRoute is a no-op in
@@ -15,7 +14,11 @@ router = APIRouter(tags=["health"], route_class=TransactionalRoute)
 
 @router.get("/health/live", summary="Liveness — is the process up")
 async def live() -> dict[str, str]:
-    return {"status": "ok", "env": settings.env}
+    # AAD-SEC-019: used to also return `"env": settings.env` — free,
+    # unauthenticated reconnaissance (an attacker learns whether they've
+    # found staging or production) for a value the load balancer's health
+    # check has no use for at all.
+    return {"status": "ok"}
 
 
 @router.get("/health", summary="Readiness — can the process serve traffic")

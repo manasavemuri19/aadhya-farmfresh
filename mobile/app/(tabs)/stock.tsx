@@ -57,7 +57,7 @@ export default function StockAdminScreen() {
 
   if (products.isPending) return <Loading label="Loading products" />;
   if (products.isError) {
-    return <ErrorState message="Could not load products." onRetry={() => void products.refetch()} />;
+    return <ErrorState error={products.error} onRetry={() => void products.refetch()} />;
   }
 
   const rows = products.data.flatMap((p: AdminProduct) =>

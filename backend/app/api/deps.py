@@ -1,15 +1,19 @@
 """Dependency wiring.
 
 Repositories and services are constructed per request from the shared database
-handle. They are cheap objects; the expensive resource (the Mongo connection
+handle. They are cheap objects; the expensive resource (the Postgres connection
 pool) is created once at startup.
+
+AAD-QUAL-004: this docstring, and the one in core/ids.py, used to reference
+Mongo and Mongo ObjectIds — leftovers from before this app was ported to
+PostgreSQL/SQLAlchemy. Nothing here has ever touched Mongo; fixed to describe
+the database this code actually talks to.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
-
 from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +25,7 @@ from app.core.security import decode_token
 from app.db.base import get_session_factory
 from app.domain.enums import Role, UserStatus
 from app.payments import PaymentProvider, get_payment_provider
+from app.repositories.cash import CashRepository
 from app.repositories.delivery import DeliveryRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.orders import OrderRepository
@@ -30,6 +35,7 @@ from app.repositories.refresh_tokens import RefreshTokenRepository
 from app.repositories.support import SupportRepository
 from app.repositories.users import UserRepository
 from app.services.auth_service import AuthService
+from app.services.cash_service import CashService
 from app.services.catalog_service import CatalogService
 from app.services.delivery_service import DeliveryService
 from app.services.order_service import OrderService
@@ -92,6 +98,10 @@ def get_delivery_repo(db: DB) -> DeliveryRepository:
     return DeliveryRepository(db)
 
 
+def get_cash_repo(db: DB) -> CashRepository:
+    return CashRepository(db)
+
+
 def get_push_token_repo(db: DB) -> PushTokenRepository:
     return PushTokenRepository(db)
 
@@ -123,22 +133,37 @@ def get_order_service(
     users: Annotated[UserRepository, Depends(get_user_repo)],
     push: Annotated[PushService, Depends(get_push_service)],
     support: Annotated[SupportRepository, Depends(get_support_repo)],
+    cash: Annotated[CashRepository, Depends(get_cash_repo)],
 ) -> OrderService:
-    # users/push/support are optional on OrderService itself (default None)
-    # so the background housekeeping sweeper in main.py, which constructs an
-    # OrderService directly rather than through this dependency chain, keeps
-    # working unchanged — it just doesn't send notifications for the expired
-    # holds it cancels. Every real HTTP request goes through here and gets
-    # all three wired automatically.
+    # users/push/support/cash are optional on OrderService itself (default
+    # None) so the background housekeeping sweeper in main.py, which
+    # constructs an OrderService directly rather than through this
+    # dependency chain, keeps working unchanged — it just doesn't send
+    # notifications for the expired holds it cancels, and never verifies a
+    # delivery so never needs cash. Every real HTTP request goes through
+    # here and gets all four wired automatically.
     return OrderService(
-        products, orders, idem, payments, users=users, push=push, support=support
+        products, orders, idem, payments,
+        users=users, push=push, support=support, cash=cash,
     )
+
+
+def get_cash_service(
+    cash: Annotated[CashRepository, Depends(get_cash_repo)],
+    users: Annotated[UserRepository, Depends(get_user_repo)],
+) -> CashService:
+    return CashService(cash, users)
 
 
 def get_support_service(
     tickets: Annotated[SupportRepository, Depends(get_support_repo)],
+    users: Annotated[UserRepository, Depends(get_user_repo)],
+    push: Annotated[PushService, Depends(get_push_service)],
 ) -> SupportService:
-    return SupportService(tickets)
+    # AAD-BIZ-005: users/push let a new ticket fan out a "new support
+    # ticket" push to staff, deferred until commit like OrderService's own
+    # notifications (AAD-REL-004) — see SupportService.submit.
+    return SupportService(tickets, users=users, push=push)
 
 
 def get_delivery_service(

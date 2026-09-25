@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from app.api.deps import _global_authenticated_limiter  # noqa: E402
 from app.api.v1.routes.auth import _google_per_minute, _refresh_per_minute  # noqa: E402
 from app.api.v1.routes.catalog import _catalog_per_minute  # noqa: E402
+from app.api.v1.routes.orders import _quote_per_minute  # noqa: E402
 from app.core.ids import new_id  # noqa: E402
 from app.core.security import issue_access_token  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -108,6 +109,25 @@ async def test_catalog_rate_limit_is_independent_per_ip(asgi_client, monkeypatch
 
     assert r_a.status_code == 200
     assert r_b.status_code == 200, "a different client IP must not share the exhausted bucket"
+
+
+async def test_cart_quote_rate_limit_returns_429(asgi_client, monkeypatch):
+    """AAD-SEC-022: /cart/quote is deliberately open to signed-out callers,
+    so it needs its own IP-keyed limiter rather than relying on
+    _global_authenticated_limiter, which only ever sees a request that
+    already carries a valid token."""
+    monkeypatch.setattr(_quote_per_minute, "_limit", 2)
+    headers = {"x-forwarded-for": _fresh_ip()}
+    body = {"lines": [{"sku": "DOES-NOT-EXIST", "qty": 1}]}
+
+    r1 = await asgi_client.post("/v1/cart/quote", json=body, headers=headers)
+    r2 = await asgi_client.post("/v1/cart/quote", json=body, headers=headers)
+    r3 = await asgi_client.post("/v1/cart/quote", json=body, headers=headers)
+
+    assert r1.status_code == 200, r1.text  # unauthenticated — no token needed
+    assert r2.status_code == 200
+    assert r3.status_code == 429, r3.text
+    assert r3.json()["error"]["code"] == "rate_limited"
 
 
 async def test_refresh_rate_limit_returns_429(asgi_client, monkeypatch):

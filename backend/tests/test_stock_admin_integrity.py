@@ -87,7 +87,7 @@ async def test_reservation_between_load_and_save_makes_a_stale_set_stock_fail(
 
 
 async def test_adjust_stock_route_records_the_real_delta_not_the_absolute_value(
-    session, products, milk
+    session, products, milk, idempotency
 ):
     """Before this fix, a `set_qty` adjustment wrote the *absolute* new
     value to the ledger as if it were a delta — staff correcting a count
@@ -99,11 +99,19 @@ async def test_adjust_stock_route_records_the_real_delta_not_the_absolute_value(
         AdjustStockRequest(sku="MILK-COW-1L", set_qty=40, expected_qty=5, reason="morning_count"),
         Principal("usr_staff1", "staff"),
         products,
+        idempotency,
     )
     await session.flush()  # record_stock_movement only session.add()s
+    # AAD-DATA-004: the `milk` fixture's own upsert_product call now writes
+    # its own opening_balance entry (the fix for a starting stock_qty that
+    # used to enter the ledger with no record at all) — filtered out here
+    # since this test is only about the adjust_stock call's own entry.
     row = (
         await session.execute(
-            select(StockLedgerRow).where(StockLedgerRow.sku == "MILK-COW-1L")
+            select(StockLedgerRow).where(
+                StockLedgerRow.sku == "MILK-COW-1L",
+                StockLedgerRow.reason != "opening_balance",
+            )
         )
     ).scalars().one()
     assert row.delta == 35  # 40 - 5, not the absolute 40

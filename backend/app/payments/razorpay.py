@@ -78,6 +78,15 @@ class RazorpayProvider(PaymentProvider):
     def __init__(self) -> None:
         if not (settings.razorpay_key_id and settings.razorpay_key_secret):
             raise RuntimeError("Razorpay credentials are not configured")
+        # AAD-OPS-009: `razorpay_callback_url` no longer defaults to
+        # anything — it used to default to the production URL, so a staging
+        # box that forgot to set it redirected paying customers into
+        # production. `Settings.assert_deploy_safe` already catches this at
+        # boot for staging/production; this is the same check at the one
+        # other place a `RazorpayProvider` can come into being — a bare
+        # `PAYMENT_PROVIDER=razorpay` in local/test with nothing else set.
+        if not settings.razorpay_callback_url:
+            raise RuntimeError("RAZORPAY_CALLBACK_URL is not configured")
         # AAD-SEC-008: razorpay_key_secret/razorpay_webhook_secret are
         # SecretStr now — .get_secret_value() unwraps to the actual string
         # only at the point of use, so nothing else in the process (a repr,
@@ -174,6 +183,39 @@ class RazorpayProvider(PaymentProvider):
                 "short_url": link["short_url"],
             },
         )
+
+    async def cancel_order(self, *, provider_order_id: str) -> None:
+        """Cancel a Payment Link — see `PaymentProvider.cancel_order`.
+
+        Razorpay refuses to cancel a link that's already been paid (its own
+        SDK docstring says so explicitly). That's the one case this can't
+        fix: if the customer paid in the same narrow window between us
+        creating the link and this call, that payment is already captured
+        and needs the refund path, not this — but it's also exactly the
+        scenario AAD-PAY-016 exists to catch, so it's logged loud rather
+        than swallowed quietly alongside the ordinary "already expired" or
+        "already cancelled" cases a `BadRequestError` here could also mean.
+        Never raises: see the base method's own contract.
+        """
+        try:
+            await asyncio.to_thread(self._client.payment_link.cancel, provider_order_id)
+        except BadRequestError:
+            log.exception(
+                "razorpay refused to cancel an orphaned payment link — if this is "
+                "because it was already paid, that payment has no matching order "
+                "in this app and needs manual investigation",
+                extra={"provider_order_id": provider_order_id},
+            )
+        except Exception:
+            # Transient/network. Smaller miss than the case above: the link
+            # still dies on its own at its own `expire_by`
+            # (AAD-PAY-006/014), this just would have closed the window
+            # sooner.
+            log.exception(
+                "could not reach razorpay to cancel an orphaned payment link — "
+                "it will still expire on its own",
+                extra={"provider_order_id": provider_order_id},
+            )
 
     def verify_payment_link_callback(
         self,

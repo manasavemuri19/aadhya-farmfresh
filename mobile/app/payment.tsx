@@ -64,7 +64,16 @@ export default function PaymentScreen() {
     },
   });
 
-  const shortUrl = order.data?.payment.checkout_payload?.short_url as string | undefined;
+  const rawShortUrl = order.data?.payment.checkout_payload?.short_url as string | undefined;
+  // AAD-MOB-021: `checkout_payload` is an untyped dict straight from the
+  // server (AAD-PERF-009) — this cast alone doesn't check the value is
+  // actually a URL, let alone an `https://` one, before handing it to
+  // `Linking.openURL`, which will open any scheme (including one that could
+  // hand off to another app or trigger a native permission prompt this
+  // screen never intended). It's our own server today, so the practical
+  // risk is low, but the check costs one line and closes the gap outright
+  // rather than trusting the payload's shape forever.
+  const shortUrl = rawShortUrl && rawShortUrl.startsWith('https://') ? rawShortUrl : undefined;
   const isRealProvider = order.data?.payment.provider === 'razorpay';
 
   // Fires once, the moment the payment link is ready — this is what removes
@@ -97,7 +106,7 @@ export default function PaymentScreen() {
 
   if (order.isPending) return <Loading label="Preparing payment" />;
   if (order.isError || !order.data) {
-    return <ErrorState message="Could not load this order." onRetry={() => void order.refetch()} />;
+    return <ErrorState error={order.error} onRetry={() => void order.refetch()} />;
   }
   if (shouldLeaveForOrderScreen) return <Loading label="Redirecting" />;
 

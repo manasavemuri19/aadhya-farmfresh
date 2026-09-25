@@ -170,7 +170,6 @@ async def _make_order(session, user) -> str:
         status="confirmed",
         subtotal_paise=1000,
         delivery_fee_paise=0,
-        discount_paise=0,
         total_paise=1000,
         address={"line1": "x", "city": "Hyderabad", "pincode": "500001"},
     )

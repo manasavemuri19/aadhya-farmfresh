@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import Integer, String, column, func, select, update, values
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -105,15 +105,32 @@ class ProductRepository:
 
         Adequate for a catalog of this size. If it grows past a few hundred
         products, swap this for a `tsvector` column with a GIN index — the
-        query changes, the interface does not.
+        query changes, the interface does not. AAD-PERF-010's leading
+        wildcard (the reason this can't use a plain B-tree index) is left
+        as-is for that same reason — not worth the schema change at 20
+        products, and the endpoint's real exposure (unauthenticated,
+        unthrottled) is a rate-limiting question, not a query one.
+
+        AAD-PERF-010: `%` and `_` in the caller's own term used to go
+        straight into the pattern unescaped — ILIKE treats both as
+        wildcards, so `q="%"` matched every active product and `q="_"`
+        matched any single character, not the literal characters typed.
+        Escaped here (backslash as the escape character, itself escaped
+        first so a literal backslash in the term doesn't turn into an
+        unintended escape) so a search for the character "%" behaves like
+        the plain substring search this looks like, not a second special
+        syntax nobody asked for.
         """
-        pattern = f"%{term.strip()}%"
+        term = term.strip()
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         stmt = (
             select(ProductRow)
             .options(selectinload(ProductRow.variants))
             .where(
                 ProductRow.is_active.is_(True),
-                ProductRow.name.ilike(pattern) | ProductRow.description.ilike(pattern),
+                ProductRow.name.ilike(pattern, escape="\\")
+                | ProductRow.description.ilike(pattern, escape="\\"),
             )
             .order_by(ProductRow.sort_order)
             .limit(limit)
@@ -140,7 +157,16 @@ class ProductRepository:
         return _to_product(row) if row else None
 
     async def find_variants(self, skus: list[str]) -> dict[str, tuple[Product, dict]]:
-        """Resolve SKUs to (product, variant) pairs in one query."""
+        """Resolve SKUs to (product, variant) pairs in one query.
+
+        AAD-PERF-011: `_to_product` used to run once per requested *SKU*,
+        rebuilding the same `Product` — including every sibling variant —
+        from scratch each time, so a 10-line cart from 3 products built 10
+        Product objects for 3 distinct ones. Built once per distinct
+        product id instead, here, and the same object is shared across
+        every SKU that belongs to it — `Product` is an immutable schema
+        instance, so sharing one across multiple dict values is safe.
+        """
         if not skus:
             return {}
         unique = list(dict.fromkeys(skus))
@@ -152,10 +178,15 @@ class ProductRepository:
             .where(VariantRow.sku.in_(unique))
         )
         rows = (await self.session.execute(stmt)).scalars().unique().all()
-        return {
-            row.sku: (_to_product(row.product), _to_variant(row).model_dump())
-            for row in rows
-        }
+        products_by_id: dict[str, Product] = {}
+        result: dict[str, tuple[Product, dict]] = {}
+        for row in rows:
+            product = products_by_id.get(row.product.id)
+            if product is None:
+                product = _to_product(row.product)
+                products_by_id[row.product.id] = product
+            result[row.sku] = (product, _to_variant(row).model_dump())
+        return result
 
     # ---------- stock ----------
 
@@ -189,8 +220,76 @@ class ProductRepository:
         )
         return made_to_order.scalars().first() is not None
 
-    async def release_stock(self, sku: str, qty: int) -> None:
-        await self.session.execute(
+    async def reserve_stock_bulk(self, items: list[tuple[str, int]]) -> dict[str, bool]:
+        """The same atomic reserve as `reserve_stock`, for every line of an
+        order in one round trip instead of one-line-at-a-time.
+
+        AAD-PERF-008: `_create_order_inner` used to call `reserve_stock`
+        once per line in a serial `await` loop — a 10-line order cost up to
+        20 round trips (an UPDATE, and for any made-to-order line a second
+        SELECT), each one holding row locks on every SKU reserved so far
+        for that much longer. This does the same compare-and-swap for every
+        requested SKU as a single `UPDATE ... FROM (VALUES ...)` statement
+        (Postgres still takes its usual per-row lock on each matched row —
+        concurrent safety on any one SKU is unchanged, `reserve_stock`
+        itself is untouched and still what `test_concurrency_real.py`
+        exercises directly), then exactly one more SELECT to tell "made-to-
+        order, nothing to reserve" apart from "genuinely out of stock"
+        among whatever didn't decrement — two round trips total, regardless
+        of how many lines the order has, matching the two-round-trip shape
+        `reserve_stock` itself already has for a single line.
+
+        Returns `{sku: ok}` for every sku in `items`; a duplicate sku in
+        `items` is deduplicated by only the first (qty, sku) instance
+        seen, since a cart only ever has one line per sku.
+        """
+        if not items:
+            return {}
+        unique_items = list({sku: (sku, qty) for sku, qty in items}.values())
+        skus = [sku for sku, _ in unique_items]
+
+        data = values(
+            column("sku", String), column("qty", Integer), name="reservation_data"
+        ).data(unique_items)
+
+        stmt = (
+            update(VariantRow)
+            .where(
+                VariantRow.sku == data.c.sku,
+                VariantRow.is_active.is_(True),
+                VariantRow.stock_policy == StockPolicy.TRACKED.value,
+                VariantRow.stock_qty >= data.c.qty,
+            )
+            .values(stock_qty=VariantRow.stock_qty - data.c.qty)
+            .returning(VariantRow.sku)
+        )
+        reserved = set((await self.session.execute(stmt)).scalars().all())
+
+        result = {sku: (sku in reserved) for sku in skus}
+        remaining = [sku for sku in skus if sku not in reserved]
+        if remaining:
+            made_to_order = await self.session.execute(
+                select(VariantRow.sku).where(
+                    VariantRow.sku.in_(remaining),
+                    VariantRow.is_active.is_(True),
+                    VariantRow.stock_policy == StockPolicy.MADE_TO_ORDER.value,
+                )
+            )
+            for sku in made_to_order.scalars().all():
+                result[sku] = True
+
+        return result
+
+    async def release_stock(self, sku: str, qty: int) -> bool:
+        """Credit stock back. Returns whether a row actually moved — False
+        for a made-to-order SKU (the `stock_policy == TRACKED` filter below
+        excludes it, same as `reserve_stock` never decrementing it in the
+        first place) rather than silently updating zero rows. AAD-DATA-004:
+        the caller uses this to decide what the stock ledger should say
+        really happened, instead of always recording `delta=+qty` whether
+        or not any row was actually credited.
+        """
+        result = await self.session.execute(
             update(VariantRow)
             .where(
                 VariantRow.sku == sku,
@@ -198,6 +297,7 @@ class ProductRepository:
             )
             .values(stock_qty=VariantRow.stock_qty + qty)
         )
+        return result.rowcount == 1
 
     async def set_stock(
         self, sku: str, qty: int, *, expected_qty: int
@@ -336,13 +436,56 @@ class ProductRepository:
                 )
         return result.rowcount == 1
 
-    async def adjust_stock(self, sku: str, delta: int) -> bool:
+    async def adjust_stock(self, sku: str, delta: int) -> tuple[bool, str | None]:
+        """Apply a stock correction (AAD-DATA-015's `:delta` path — "two got
+        broken", not the morning `set_qty` recount).
+
+        Returns `(True, None)` on success. On failure the second element
+        names why, mirroring `set_stock`'s `(bool, int | None)` shape:
+        `"no_such_sku"`, `"not_tracked"`, or `"insufficient_stock"`.
+
+        AAD-API-005: this used to return a plain `bool`, so `False` meant
+        either "no such SKU" or "that would take stock below zero" —
+        indistinguishable to the caller. `admin.py` reported every `False`
+        as the negative-stock message, so a staff member who mistyped a SKU
+        was told *"That adjustment would take stock below zero"* for a
+        product that doesn't exist, which sends them looking for a typo in
+        the wrong place.
+
+        AAD-QUAL-030: also now filters to `stock_policy == TRACKED`, like
+        `reserve_stock`/`release_stock` already do. `sellable_qty()`
+        ignores `stock_qty` entirely for a MADE_TO_ORDER variant, so an
+        adjustment against one was previously silent, uncaught noise: the
+        write "succeeded", the ledger recorded a movement
+        (`find_stock_discrepancies` never checks it — scoped to TRACKED
+        only, by its own docstring), and the number it moved had no effect
+        on anything a customer could ever see. Now reported explicitly as
+        `"not_tracked"` instead of quietly accepted.
+        """
         result = await self.session.execute(
             update(VariantRow)
-            .where(VariantRow.sku == sku, VariantRow.stock_qty >= max(0, -delta))
+            .where(
+                VariantRow.sku == sku,
+                VariantRow.stock_policy == StockPolicy.TRACKED.value,
+                VariantRow.stock_qty >= max(0, -delta),
+            )
             .values(stock_qty=VariantRow.stock_qty + delta)
         )
-        return result.rowcount == 1
+        if result.rowcount == 1:
+            return True, None
+
+        row = (
+            await self.session.execute(
+                select(VariantRow.stock_policy, VariantRow.stock_qty).where(
+                    VariantRow.sku == sku
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return False, "no_such_sku"
+        if row.stock_policy != StockPolicy.TRACKED.value:
+            return False, "not_tracked"
+        return False, "insufficient_stock"
 
     async def record_stock_movement(
         self,
@@ -359,6 +502,47 @@ class ProductRepository:
             )
         )
 
+    async def find_stock_discrepancies(self) -> list[dict[str, Any]]:
+        """AAD-DATA-004: the reconciliation query the ledger exists for —
+        `SUM(delta) GROUP BY sku`, compared against the live `stock_qty`
+        for every TRACKED variant. Scoped to TRACKED only: MADE_TO_ORDER
+        variants have no shelf count to reconcile, and now (with the
+        made-to-order and opening-balance fixes above) contribute nothing
+        but zero-delta entries anyway.
+
+        Not wired to a schedule from here — this repository has no
+        scheduler to attach one to (see app/main.py for where the other
+        periodic sweeps live) — but it is real and callable today: from a
+        one-off script, a staff endpoint, or the sweeper once someone wires
+        it in. A variant that already had nonzero stock before this session
+        added the opening-balance entry above will show up here with a
+        discrepancy equal to that old, un-ledgered starting quantity —
+        that's a real gap in the historical data, not a bug in this query,
+        and it needs a one-time backfill from the farm's own records, not a
+        number invented by this codebase.
+        """
+        stmt = (
+            select(
+                VariantRow.sku,
+                VariantRow.stock_qty,
+                func.coalesce(func.sum(StockLedger.delta), 0).label("ledger_sum"),
+            )
+            .outerjoin(StockLedger, StockLedger.sku == VariantRow.sku)
+            .where(VariantRow.stock_policy == StockPolicy.TRACKED.value)
+            .group_by(VariantRow.sku, VariantRow.stock_qty)
+            .having(VariantRow.stock_qty != func.coalesce(func.sum(StockLedger.delta), 0))
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [
+            {
+                "sku": row.sku,
+                "stock_qty": row.stock_qty,
+                "ledger_sum": row.ledger_sum,
+                "discrepancy": row.stock_qty - row.ledger_sum,
+            }
+            for row in rows
+        ]
+
     # ---------- writes ----------
 
     async def upsert_category(self, category: Category) -> None:
@@ -368,7 +552,23 @@ class ProductRepository:
             existing.sort_order = category.sort_order
             existing.is_active = category.is_active
         else:
-            self.session.add(CategoryRow(**category.model_dump()))
+            # AAD-QUAL-029 / AAD-SEC-021: the update branch above already
+            # assigns each field by name — the insert branch was the one
+            # instance left splatting a schema dump straight into the ORM
+            # constructor. `upsert_category` is only ever called from
+            # `scripts/seed.py` today, never a live route, so `category`
+            # isn't attacker-controlled here the way `users.py`'s address
+            # upsert is — but the fix is the same for the same reason: one
+            # schema change away from `CategoryRow` picking up a field this
+            # constructor call would then set without anyone deciding to.
+            self.session.add(
+                CategoryRow(
+                    slug=category.slug,
+                    name=category.name,
+                    sort_order=category.sort_order,
+                    is_active=category.is_active,
+                )
+            )
 
     async def upsert_product(
         self, product: Product, *, actor: str = "system", source: str = "seed"
@@ -387,6 +587,27 @@ class ProductRepository:
         overwritten — no extra query needed. Only genuinely *changed*
         fields on *existing* variants get an audit row; a brand-new variant
         has no "old" value to record against.
+
+        AAD-DATA-018: `slug` is the only natural key this method has to
+        match an existing product by — `product.id` isn't a stable
+        identifier the caller intentionally sets; `scripts/seed.py` (this
+        method's only caller today) generates a fresh random one on every
+        single run, for every product, whether or not it already exists.
+        This method only ever uses that fresh id when no existing row
+        matched by slug — for an existing product it's silently discarded,
+        the stored row keeps its original id, which is correct. The real
+        gap: if a product's `slug` is ever *edited* in the source list (a
+        typo fix, a rename) while keeping "the same" conceptual product,
+        this method has no way to recognise that — the old-slug row is
+        never found, a brand-new row is inserted under the new slug with a
+        new id, and the old row is silently orphaned rather than updated or
+        removed. There is no reliable way to detect a rename automatically
+        without an explicit old-slug -> new-slug mapping this codebase
+        doesn't have, so this isn't fixed here — but every genuinely new
+        insert is now logged, so an accidental slug edit at least becomes
+        visible in the seed run's output instead of a silent, permanent
+        orphan. A deliberate rename must still be done by hand today (e.g.
+        `UPDATE products SET slug = ... WHERE id = ...` before re-seeding).
         """
         stmt = (
             select(ProductRow)
@@ -396,6 +617,13 @@ class ProductRepository:
         row = (await self.session.execute(stmt)).scalars().first()
 
         if row is None:
+            log.warning(
+                "upsert_product: no existing row for slug %r — inserting a "
+                "new product. If this slug used to be something else, the "
+                "old row is now an orphan (AAD-DATA-018) and needs a "
+                "manual fix, not another seed run.",
+                product.slug,
+            )
             row = ProductRow(id=product.id, slug=product.slug)
             self.session.add(row)
 
@@ -418,6 +646,23 @@ class ProductRepository:
             if target is None:
                 target = VariantRow(sku=variant.sku, stock_qty=variant.stock_qty)
                 row.variants.append(target)
+                # AAD-DATA-004: a brand-new TRACKED variant's starting
+                # stock_qty used to enter the system with no ledger entry at
+                # all — every reconciliation of this SKU from that day
+                # forward would be short by exactly this many units,
+                # forever, through no fault of anything that happened
+                # later. One opening entry here is what lets
+                # `SUM(delta) GROUP BY sku` actually equal `stock_qty` from
+                # the moment a variant exists, not just from whenever
+                # someone happened to first run a stock count through
+                # `set_stock`. Zero-quantity and made-to-order variants get
+                # nothing to reconcile in the first place, so there's
+                # nothing worth recording for them.
+                if variant.stock_policy == StockPolicy.TRACKED and variant.stock_qty:
+                    await self.record_stock_movement(
+                        sku=variant.sku, delta=variant.stock_qty,
+                        reason="opening_balance", actor=actor,
+                    )
 
             before = None if is_new else {f: getattr(target, f) for f in audited_fields}
 
@@ -470,3 +715,47 @@ class ProductRepository:
                 actor=actor, source=source,
             )
         return result.rowcount == 1
+
+    # AAD-BIZ-003: low-stock owner alert. `low_stock_notified` is what keeps
+    # the housekeeping sweep (every 2 minutes) from re-pushing the same SKU
+    # to staff/admin on every pass while it sits at, say, 1 unit — see the
+    # column's own comment in db/models.py.
+    async def find_newly_low_stock(self) -> list[dict[str, Any]]:
+        """SKUs that are in the low-stock band right now and haven't already
+        been flagged — `is_active` only, since a disabled/delisted variant
+        isn't something an owner needs woken up for."""
+        stmt = select(VariantRow.sku, VariantRow.label, VariantRow.stock_qty).where(
+            VariantRow.stock_policy == StockPolicy.TRACKED.value,
+            VariantRow.is_active.is_(True),
+            VariantRow.low_stock_notified.is_(False),
+            VariantRow.stock_qty > 0,
+            VariantRow.stock_qty <= VariantRow.low_stock_threshold,
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [{"sku": r.sku, "label": r.label, "stock_qty": r.stock_qty} for r in rows]
+
+    async def mark_low_stock_notified(self, skus: list[str]) -> None:
+        if not skus:
+            return
+        await self.session.execute(
+            update(VariantRow)
+            .where(VariantRow.sku.in_(skus))
+            .values(low_stock_notified=True)
+        )
+
+    async def clear_stale_low_stock_flags(self) -> int:
+        """Re-arms the flag once a SKU's stock has moved back out of the
+        low-stock band — restocked above the threshold, or sold through to
+        zero (already visible in-app as sold out; nothing more to alert on
+        until it's restocked and dips low again). Run every sweep, same as
+        find_newly_low_stock, so a restock is picked up within one cycle."""
+        result = await self.session.execute(
+            update(VariantRow)
+            .where(
+                VariantRow.low_stock_notified.is_(True),
+                (VariantRow.stock_qty == 0)
+                | (VariantRow.stock_qty > VariantRow.low_stock_threshold),
+            )
+            .values(low_stock_notified=False)
+        )
+        return result.rowcount

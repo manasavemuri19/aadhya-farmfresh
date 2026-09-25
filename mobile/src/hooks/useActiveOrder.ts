@@ -39,5 +39,12 @@ export function useActiveOrders(): OrderView[] {
     enabled: !isDeliveryAgent,
   });
 
-  return orders.data?.filter((o) => IN_PROGRESS_STATUSES.includes(o.status)) ?? [];
+  // AAD-API-004: list() now returns a cursor page. Only the first page is
+  // ever checked here, which is deliberate, not an oversight — an order
+  // that's still in flight (confirmed/packed/out_for_delivery) is by
+  // definition recent, so it's vanishingly unlikely to have already been
+  // pushed past the first 20 by newer orders. Older, unpaginated history is
+  // exactly what a completed/cancelled/refunded order becomes, and this
+  // hook was never meant to cover that — see orders.tsx for full history.
+  return orders.data?.items.filter((o) => IN_PROGRESS_STATUSES.includes(o.status)) ?? [];
 }

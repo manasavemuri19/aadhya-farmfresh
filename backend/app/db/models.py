@@ -13,6 +13,25 @@ Notes on the modelling choices that matter:
   future query cannot drive stock below zero.
 * **Order status transitions are enforced in code**, but every transition is
   also appended to `order_events`, giving a complete audit trail.
+* **Primary-key strategy: aggregate roots get prefixed opaque strings, child
+  rows get `SERIAL` integers.** `users`, `orders`, `products` and `payments`
+  are `core/ids.py`'s prefixed ids (`usr_...`, `ord_...`) — rows a client
+  ever sees a standalone id for, in a URL or a request body, get the opaque
+  treatment that module's docstring describes. `addresses`, `order_lines`,
+  `order_events`, `stock_ledger`, `webhook_events`, `idempotency_keys` and
+  `otp_challenges` are plain `SERIAL` integers — rows that only ever exist
+  scoped under their parent (an address is always read and written through
+  `/auth/me/addresses`, keyed by `user_id` + `label`, never by its own id;
+  same shape for every other row in this list). `addresses.id` is the one
+  exception worth naming explicitly: nothing in the schemas or routes
+  exposes it today (`schemas/auth.Address` has no `id` field at all,
+  confirmed by reading it), so the SERIAL choice is fine as things stand —
+  but it's also the row here closest to becoming independently addressable
+  (an edit-this-specific-address flow, say), which is exactly when a
+  sequential integer id would start mattering. AAD-QUAL-026 flagged this
+  split as undocumented, contradicting `core/ids.py`'s own stated doctrine;
+  it isn't a contradiction, just a rule that was never written down — this
+  paragraph is that rule.
 """
 
 from __future__ import annotations
@@ -33,6 +52,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -213,6 +233,10 @@ class Variant(Base, TimestampMixin):
     stock_policy: Mapped[str] = mapped_column(String(16), default="tracked", nullable=False)
     stock_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     low_stock_threshold: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    # AAD-BIZ-003: whether the low-stock owner push has already gone out for
+    # this SKU's current dip — see _notify_low_stock in order_service.py.
+    # Cleared once stock next leaves the low-stock band, so it re-arms.
+    low_stock_notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_per_order: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -226,6 +250,17 @@ class Order(Base, TimestampMixin):
         Index("ix_order_user_created", "user_id", "created_at"),
         Index("ix_order_status_created", "status", "created_at"),
         Index("ix_order_delivery_agent", "delivery_agent_id"),
+        # AAD-REL-005: the hold sweeper's own query — "still pending_payment,
+        # and hold_expires_at in the past" — had no index at all;
+        # ix_order_status_created doesn't help since it isn't on
+        # hold_expires_at. Partial, not composite: only pending_payment rows
+        # ever have a meaningful hold_expires_at, so indexing every other
+        # status's (always-irrelevant) value would just be dead weight.
+        Index(
+            "ix_order_hold_expires_pending",
+            "hold_expires_at",
+            postgresql_where=text("status = 'pending_payment'"),
+        ),
         CheckConstraint("total_paise >= 0", name="ck_order_total_non_negative"),
         # AAD-DATA-010: `status` is a closed set (OrderStatus enum) — see the
         # same constraint on `order_events.status` below, which uses the
@@ -247,7 +282,14 @@ class Order(Base, TimestampMixin):
 
     subtotal_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     delivery_fee_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    discount_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # AAD-QUAL-015: `discount_paise` used to live here, always `0` — nothing
+    # in this codebase has ever computed a non-zero discount. Carrying a
+    # structurally-dead column (and the schema/API field, and the pricing
+    # dataclass field it fed) through every order read and write was pure
+    # noise for a value that could never differ from its own default.
+    # Dropped in migration 0018; if promotions are ever built, a discount
+    # column can come back alongside the actual promotion logic that
+    # computes it, rather than sitting here unused waiting for one.
     total_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
 
@@ -270,6 +312,16 @@ class Order(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     delivery_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # AAD-SEC-027: in-app proof-of-delivery. Generated (via extra_set on the
+    # CAS transition) the moment an order becomes out_for_delivery, cleared
+    # the same way once it becomes delivered — see OrderService.update_status
+    # and OrderRepository.transition. See the migration's own docstring for
+    # why both a hash and a short-lived plaintext copy are kept.
+    delivery_otp_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_otp_plain: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    delivery_otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_otp_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     lines: Mapped[list[OrderLine]] = relationship(
         back_populates="order", cascade="all, delete-orphan", lazy="selectin"
@@ -357,7 +409,14 @@ class OrderEvent(Base):
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
     __table_args__ = (
-        Index("ix_payment_provider_order", "provider_order_id"),
+        # AAD-DATA-007: was a plain, non-unique index — `get_by_provider_order_id`
+        # uses `.first()`, so two rows that happened to share a provider order
+        # id would silently resolve to an arbitrary one instead of either
+        # being impossible or raising loudly. Postgres allows any number of
+        # NULLs under a UNIQUE index (COD payments never get a provider
+        # order id at all), so this only actually constrains the online
+        # payments that have one.
+        Index("ix_payment_provider_order", "provider_order_id", unique=True),
         # AAD-DATA-010: `method` and `status` are both closed sets
         # (PaymentMethod and PaymentStatus enums).
         CheckConstraint("method IN ('online', 'cod')", name="ck_payment_method_valid"),
@@ -402,7 +461,19 @@ class StockLedger(Base):
     sku: Mapped[str] = mapped_column(String(48), nullable=False)
     delta: Mapped[int] = mapped_column(Integer, nullable=False)
     reason: Mapped[str] = mapped_column(String(64), nullable=False)
-    order_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    # AAD-DATA-014: was indexed but had no FK — a typo'd or stale order_id
+    # would sit here forever with nothing to notice. `order_id` is nullable
+    # for adjustments not tied to any order (a manual stock correction,
+    # `reason="admin_adjustment"`), so SET NULL rather than CASCADE: nothing
+    # in this codebase ever hard-deletes an `orders` row today (checked —
+    # every other FK to `orders` is CASCADE precisely because their rows
+    # are meaningless without it; the ledger's own audit value is not),
+    # but if that ever changes, the ledger entry should survive as an
+    # orphaned-but-present audit record rather than disappear with the order
+    # it once referenced.
+    order_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("orders.id", ondelete="SET NULL"), index=True
+    )
     actor: Mapped[str] = mapped_column(String(40), default="system", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -540,19 +611,124 @@ class SupportTicket(Base, TimestampMixin):
     tree, for when none of the canned answers actually resolved things.
 
     Deliberately minimal — this is a mailbox, not a full support-ticketing
-    system: no status field, no assignment, no reply thread. Reviewing
-    submissions means querying this table directly until an admin view is
-    worth building — a real, disclosed gap, not an oversight.
+    system: no assignment, no reply thread. AAD-BIZ-005 added `status` and
+    `GET /admin/support/tickets` (routes/admin.py) so this mailbox is at
+    least readable and markable-done; a real workflow (assignment, replies)
+    is still a disclosed gap, not an oversight.
     """
 
     __tablename__ = "support_tickets"
-    __table_args__ = (Index("ix_support_ticket_user", "user_id"),)
+    __table_args__ = (
+        Index("ix_support_ticket_user", "user_id"),
+        Index("ix_support_ticket_status_created", "status", "created_at"),
+        CheckConstraint(
+            "status IN ('open', 'closed')", name="ck_support_ticket_status_valid"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    # AAD-SEC-034: this had no ForeignKey to `users` — a ticket could
+    # reference a user id that never existed, or one already deleted, and
+    # nothing would notice; the id also couldn't be reliably joined against
+    # `users` for an admin view. CASCADE matches every other user-owned row
+    # in this schema (addresses, push_tokens): if the account goes, its
+    # mailbox entries go with it rather than becoming orphaned rows pointing
+    # at nobody.
+    user_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     message: Mapped[str] = mapped_column(Text, nullable=False)
     # Which node of the decision tree they were on when they gave up on the
     # canned answers and wrote in — free-form, purely to help whoever reads
     # this ticket understand the context without re-asking. Null if ever
     # submitted some other way in the future.
     context_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # AAD-BIZ-005: open until a staff account closes it via
+    # POST /admin/support/tickets/{id}/close. A plain string, not the
+    # SupportTicketStatus enum, for the same reason every other status
+    # column here is — see AAD-DATA-010's CHECK-constraint migration.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+
+
+class CashSettlement(Base, TimestampMixin):
+    """AAD-BIZ-004: one row per cash-settlement attempt for one delivery
+    agent — created before its `CodCollection` rows are claimed into it
+    (see `CashRepository.settle_agent`'s own ordering note) so those rows'
+    `settlement_id` foreign key always points at a real, already-committed
+    parent.
+
+    `status` is never inferred by a reader — it's written once, at
+    creation, by comparing `actual_amount_paise` (what an admin recorded as
+    physically received) against `expected_amount_paise` (the sum of the
+    collections this settlement claims). Exact match: `settled`. Any
+    difference: `discrepancy`, with `reason` required — see
+    `CashService.settle_agent`. A settlement is never edited after
+    creation; a corrected amount is a new settlement against whatever the
+    agent still has pending.
+    """
+
+    __tablename__ = "cash_settlements"
+    __table_args__ = (
+        Index("ix_cash_settlement_agent_created", "agent_id", "created_at"),
+        CheckConstraint("expected_amount_paise >= 0", name="ck_settlement_expected_non_negative"),
+        CheckConstraint("actual_amount_paise >= 0", name="ck_settlement_actual_non_negative"),
+        CheckConstraint(
+            "status IN ('settled', 'discrepancy')", name="ck_settlement_status_valid"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    expected_amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actual_amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # actual - expected. Signed: negative means short, positive means over.
+    discrepancy_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    recorded_by: Mapped[str] = mapped_column(
+        String(40), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    collections: Mapped[list[CodCollection]] = relationship(back_populates="settlement")
+
+
+class CodCollection(Base):
+    """AAD-BIZ-004: written exactly once per COD order, the moment
+    `OrderService.verify_delivery_code` succeeds for a COD order — never at
+    order creation, never by the agent self-reporting an amount. `amount_paise`
+    is the order's own recorded total, not anything the agent enters, so
+    there is nothing for an agent to under-report.
+
+    `order_id` is UNIQUE: on top of the delivery OTP already being
+    single-use (AAD-SEC-027), this is a second, structural guard against
+    ever recording the same order's cash twice. `settlement_id` starts
+    NULL ("pending, not yet handed back to the farm") and is set exactly
+    once, by `CashRepository.claim_for_settlement`, when an admin settles
+    that agent's cash — see `CashSettlement`'s own docstring for why a
+    claimed collection is never reopened.
+    """
+
+    __tablename__ = "cod_collections"
+    __table_args__ = (
+        Index("ix_cod_collection_agent_pending", "agent_id", "settlement_id"),
+        CheckConstraint("amount_paise > 0", name="ck_cod_collection_amount_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    order_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("orders.id", ondelete="RESTRICT"), unique=True, nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    settlement_id: Mapped[str | None] = mapped_column(
+        String(40), ForeignKey("cash_settlements.id", ondelete="SET NULL"), nullable=True
+    )
+
+    settlement: Mapped[CashSettlement | None] = relationship(back_populates="collections")

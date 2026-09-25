@@ -47,6 +47,13 @@ export default function ProfileTab() {
         </Pressable>
 
         <Pressable
+          onPress={() => router.push('/addresses')}
+          style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+        >
+          <Text style={styles.rowLabel}>Saved addresses</Text>
+        </Pressable>
+
+        <Pressable
           onPress={() => router.push('/help-support')}
           style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
         >

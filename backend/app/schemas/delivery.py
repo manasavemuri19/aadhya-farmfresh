@@ -80,6 +80,15 @@ class UpdateDeliveryStatusRequest(Schema):
     note: str = Field(default="", max_length=200)
 
 
+class VerifyDeliveryCodeRequest(Schema):
+    """AAD-SEC-027. The 4-digit code the customer's own app shows them —
+    `pattern` rejects anything that isn't exactly 4 digits before this ever
+    reaches OrderService.verify_delivery_code, so a malformed guess costs
+    nothing against the attempt cap."""
+
+    code: str = Field(pattern=r"^\d{4}$")
+
+
 class ReassignDeliveryRequest(Schema):
     """AAD-REL-006. agent_id=None sends the order back to the unassigned
     pool instead of handing it to someone specific."""

@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.ids import new_id
@@ -33,14 +34,71 @@ TEST_DATABASE_URL = os.getenv(
 )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _build_schema_once():
+    """AAD-OPS-023: this schema rebuild (`drop_all` + `create_all`) used to
+    run once per test — real DDL, ~590 times a run. Now it runs exactly
+    once per test session; `_clean_schema` below gives each test its
+    isolation instead, without redoing DDL for it.
+
+    Deliberately a **plain sync fixture using a throwaway sync engine**,
+    not an async, session-scoped version of the `engine` fixture below.
+    Tried that first and hit pytest-asyncio's known pitfall head-on: a
+    session-scoped async fixture and function-scoped test coroutines don't
+    share an event loop by default, so an asyncpg connection opened while
+    building the schema gets used from a *different* loop by the first
+    test and asyncpg raises `RuntimeError: Future attached to a different
+    loop`. Fixable with more pytest-asyncio configuration (`loop_scope`
+    plumbing throughout), but a plain sync engine sidesteps event loops
+    entirely for a one-time, one-shot piece of DDL that doesn't need to be
+    async in the first place — simpler and has nothing to get wrong.
+    """
+    sync_url = TEST_DATABASE_URL.replace("postgresql+asyncpg", "postgresql+psycopg")
+    sync_engine = create_engine(sync_url)
+    Base.metadata.drop_all(sync_engine)
+    Base.metadata.create_all(sync_engine)
+    sync_engine.dispose()
+
+
 @pytest.fixture
 async def engine():
+    """Stays function-scoped deliberately — see `_build_schema_once` above
+    for why a session-scoped *async* engine doesn't work safely here. This
+    fixture no longer does any DDL (the schema already exists by the time
+    any test runs); it just opens a connection to it, which is cheap.
+    """
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=None)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+async def _clean_schema(engine):
+    """AAD-OPS-023: gives every test a clean slate now that the schema is
+    built once per run rather than once per test (`_build_schema_once`).
+
+    Deliberately `TRUNCATE ... RESTART IDENTITY CASCADE` between tests
+    rather than the more common savepoint-per-test pattern (begin a
+    transaction, hand tests a session bound to it, roll back at teardown
+    instead of committing). That pattern would break a large and important
+    part of this suite: the real-concurrency tests (`test_concurrency_real.py`,
+    Batch 20's race test in `test_batch20_hygiene.py`) and every HTTP-layer
+    test (`test_http_layer.py`'s `client` fixture gives each simulated
+    request its own real session) all depend on a genuinely *separate*
+    connection seeing genuinely *committed* data — that's the whole point
+    of what they're testing. A savepoint rolled back at teardown is
+    invisible to any other connection, which would make all of that
+    machinery silently test nothing. TRUNCATE keeps the same "writes really
+    commit, a second connection really sees them" architecture those tests
+    need, while still resetting every table (and every SERIAL sequence, via
+    `RESTART IDENTITY`) before each test runs — the same effective
+    per-test starting state `drop_all`/`create_all` always gave, just far
+    cheaper to produce.
+    """
+    async with engine.begin() as conn:
+        table_names = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+        await conn.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
+    yield
 
 
 @pytest.fixture
@@ -59,6 +117,34 @@ def products(session) -> ProductRepository:
 @pytest.fixture
 def orders(session) -> OrderRepository:
     return OrderRepository(session)
+
+
+@pytest.fixture
+def idempotency(session) -> IdempotencyRepository:
+    return IdempotencyRepository(session)
+
+
+class QueryCounter:
+    """AAD-OPS-025: counts real round trips to the database, not Python-
+    level repository calls — `session.add()` alone never shows up here,
+    only an actual statement sent over the connection does. `.count` is
+    mutable so a test can reset it between two calls it wants to compare
+    (e.g. "does a bigger cart issue more queries than a smaller one")."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+
+@pytest.fixture
+def query_counter(engine) -> QueryCounter:
+    counter = QueryCounter()
+
+    def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        counter.count += 1
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+    yield counter
+    event.remove(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
 
 
 @pytest.fixture

@@ -8,9 +8,9 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import update
 
-from app.core.errors import Conflict
+from app.core.errors import Conflict, Forbidden
 from app.db.models import User as UserRow
-from app.domain.enums import PaymentMethod
+from app.domain.enums import OrderStatus, PaymentMethod
 from app.repositories.delivery import DeliveryRepository
 from app.repositories.users import UserRepository
 from app.schemas.auth import Address
@@ -149,3 +149,132 @@ async def test_expanding_radius_widens_until_something_is_in_range(
     requests = await delivery_service.list_requests(agent["id"])
     match = next(r for r in requests if r.id == order.id)
     assert match.distance_km is not None and match.distance_km > 2.0
+
+
+# --- AAD-OPS-018: release, update_status authorization, the status allowlist
+
+
+async def test_release_sends_an_accepted_order_back_to_the_pool(
+    order_service, delivery_service, agent, user, milk
+):
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-release-1",
+    )
+    await delivery_service.accept(order.id, agent["id"])
+    ongoing = await delivery_service.list_ongoing(agent["id"])
+    assert any(o.id == order.id for o in ongoing)
+
+    await delivery_service.release(order.id, agent["id"])
+
+    ongoing_after = await delivery_service.list_ongoing(agent["id"])
+    assert not any(o.id == order.id for o in ongoing_after)
+    requests_after = await delivery_service.list_requests(agent["id"])
+    assert any(r.id == order.id for r in requests_after)
+
+
+async def test_release_conflicts_when_the_order_is_not_assigned_to_this_agent(
+    order_service, delivery_service, agent, user, milk
+):
+    """An order nobody has accepted yet — the same `release()` call an
+    agent who mistakenly thinks they hold it would make."""
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-release-2",
+    )
+
+    with pytest.raises(Conflict):
+        await delivery_service.release(order.id, agent["id"])
+
+
+async def test_release_conflicts_when_accepted_by_a_different_agent(
+    order_service, delivery_service, users_repo, agent, user, milk
+):
+    """The authorization half specifically: a *second* agent trying to
+    release an order the *first* agent holds must not be able to — same
+    underlying check (`DeliveryRepository.release`'s own `agent_id` match),
+    different scenario than "nobody has it yet"."""
+    other_agent = await users_repo.get_or_create_by_google(
+        google_sub="test_agent_sub_0002", email="agent2@example.com", name="Other Agent",
+    )
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-release-3",
+    )
+    await delivery_service.accept(order.id, agent["id"])
+
+    with pytest.raises(Conflict):
+        await delivery_service.release(order.id, other_agent["id"])
+
+
+async def test_update_status_is_forbidden_when_the_order_is_not_assigned_to_this_agent(
+    order_service, delivery_service, agent, user, milk
+):
+    """`get_one` returning `None` covers both "no such order" and "not
+    yours" the same way, by design (the docstring is explicit about not
+    leaking which one it was) — this is the "not yours" half: nobody has
+    accepted this order at all yet."""
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-status-1",
+    )
+
+    with pytest.raises(Forbidden):
+        await delivery_service.update_status(order.id, agent["id"], OrderStatus.PACKED)
+
+
+async def test_update_status_is_forbidden_for_a_status_agents_cannot_set(
+    order_service, delivery_service, agent, user, milk
+):
+    """The allowlist itself: agents can only move an order to Packed, On
+    the way, or Delivered — never back to Confirmed, and never straight to
+    Cancelled or Refunded, both of which stay staff/admin-only."""
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-status-2",
+    )
+    await delivery_service.accept(order.id, agent["id"])
+
+    with pytest.raises(Forbidden):
+        await delivery_service.update_status(order.id, agent["id"], OrderStatus.CANCELLED)
+
+
+async def test_update_status_happy_path_moves_the_order_and_preserves_assignment_time(
+    order_service, delivery_service, agent, user, milk
+):
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="delivery-test-status-3",
+    )
+    accepted = await delivery_service.accept(order.id, agent["id"])
+
+    packed = await delivery_service.update_status(order.id, agent["id"], OrderStatus.PACKED)
+    assert packed.status == OrderStatus.PACKED.value
+    # AAD-PERF-013: this comes from the pre-update `existing` read, not a
+    # third re-read of the order — pinned here so a future regression in
+    # that fix would show up as a wrong (or missing) value, not just an
+    # extra query.
+    assert packed.delivery_assigned_at == accepted.delivery_assigned_at
+
+    on_the_way = await delivery_service.update_status(
+        order.id, agent["id"], OrderStatus.OUT_FOR_DELIVERY
+    )
+    assert on_the_way.status == OrderStatus.OUT_FOR_DELIVERY.value
+
+    # AAD-SEC-027: an agent can no longer self-report DELIVERED through the
+    # plain status endpoint — see _AGENT_ALLOWED_STATUSES' own comment. The
+    # code the customer's app would show them is read back via the
+    # customer-facing OrderView (DeliveryOrderView deliberately never
+    # carries it), then entered through verify_delivery.
+    customer_view = await order_service.get_for_user(order.id, user["id"])
+    assert customer_view.delivery_code is not None
+    delivered = await delivery_service.verify_delivery(
+        order.id, agent["id"], customer_view.delivery_code
+    )
+    assert delivered.status == OrderStatus.DELIVERED.value

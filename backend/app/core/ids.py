@@ -2,7 +2,12 @@
 
 Public ids are opaque, URL-safe and prefixed, so a value that leaks into a log
 or a support ticket is immediately identifiable. We deliberately avoid exposing
-Mongo ObjectIds, which encode a creation timestamp and are enumerable-adjacent.
+raw database primary keys, which can encode a creation order and be
+enumerable-adjacent.
+
+AAD-QUAL-004: this docstring used to say "Mongo ObjectIds" — a leftover from
+before this app was ported to PostgreSQL/SQLAlchemy. This module has never
+generated or depended on a Mongo ObjectId.
 """
 
 from __future__ import annotations

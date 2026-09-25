@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import { authApi } from '../api/endpoints';
 import { tokenStore } from './tokenStore';
 import { signOutOfGoogle } from '../lib/googleAuth';
+import { deregisterPushNotifications } from '../lib/pushNotifications';
 import { ApiError } from '../api/client';
 import type { UserProfile } from '../api/types';
 
@@ -22,6 +23,13 @@ interface SessionState {
   // whether they're still valid". See restore() below for exactly which
   // failures land here versus which still sign out for real.
   status: 'loading' | 'signed_in' | 'signed_out' | 'degraded';
+  // AAD-MOB-026: kept so `_layout.tsx` can show the same shared "no
+  // connection" vs. "something went wrong" split every other failed screen
+  // uses (`describeError` in client.ts), instead of a single fixed sentence
+  // that assumed every `degraded` case was a connectivity problem — restore()
+  // itself already knows this can also be a genuine 500, per the comment
+  // below.
+  degradedError: unknown;
   restore: () => Promise<void>;
   setUser: (user: UserProfile) => void;
   signOut: () => Promise<void>;
@@ -30,6 +38,7 @@ interface SessionState {
 export const useSession = create<SessionState>((set) => ({
   user: null,
   status: 'loading',
+  degradedError: null,
 
   restore: async () => {
     const token = await tokenStore.getAccessToken();
@@ -38,7 +47,7 @@ export const useSession = create<SessionState>((set) => ({
       return;
     }
     try {
-      set({ user: await authApi.me(), status: 'signed_in' });
+      set({ user: await authApi.me(), status: 'signed_in', degradedError: null });
     } catch (error) {
       // AAD-MOB-002: any failure of `me()` used to be treated as "this
       // session is revoked" — a 500, a timeout, a cold start past 40s, or
@@ -56,7 +65,7 @@ export const useSession = create<SessionState>((set) => ({
         await Promise.all([tokenStore.clear(), signOutOfGoogle()]);
         set({ status: 'signed_out', user: null });
       } else {
-        set({ status: 'degraded', user: null });
+        set({ status: 'degraded', user: null, degradedError: error });
       }
     }
   },
@@ -64,6 +73,11 @@ export const useSession = create<SessionState>((set) => ({
   setUser: (user) => set({ user, status: 'signed_in' }),
 
   signOut: async () => {
+    // AAD-SEC-032: deregister the push token first — it needs the access
+    // token that `tokenStore.clear()` is about to delete. Best-effort by
+    // design (see pushNotifications.ts): a failure here must never block
+    // sign-out itself.
+    await deregisterPushNotifications();
     await Promise.all([tokenStore.clear(), signOutOfGoogle()]);
     set({ user: null, status: 'signed_out' });
   },

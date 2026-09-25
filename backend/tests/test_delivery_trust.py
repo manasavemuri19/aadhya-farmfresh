@@ -30,6 +30,7 @@ from sqlalchemy import update
 import app.services.delivery_service as delivery_service_module
 from app.api.deps import Principal, require_staff
 from app.api.v1.routes.admin import reassign_delivery
+from app.core.config import settings
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.db.models import User as UserRow
 from app.domain.enums import OrderStatus, PaymentMethod
@@ -155,7 +156,11 @@ async def test_reassign_rejects_orders_with_nothing_left_to_reassign(
     await delivery_service.accept(order.id, agent["id"])
     await delivery_service.update_status(order.id, agent["id"], OrderStatus.PACKED)
     await delivery_service.update_status(order.id, agent["id"], OrderStatus.OUT_FOR_DELIVERY)
-    await delivery_service.update_status(order.id, agent["id"], OrderStatus.DELIVERED)
+    # AAD-SEC-027: DELIVERED is reached via the customer's in-app code now,
+    # not a plain agent-set status — see test_delivery.py's happy-path test
+    # for the same substitution with more explanation.
+    customer_view = await order_service.get_for_user(order.id, user["id"])
+    await delivery_service.verify_delivery(order.id, agent["id"], customer_view.delivery_code)
 
     with pytest.raises(NotFound):
         await delivery_service.reassign(order.id, new_agent_id=agent2["id"], actor_id="usr_staff1")
@@ -193,8 +198,13 @@ async def test_reassign_route_delegates_to_the_service(
 
 
 async def test_accept_enforces_the_concurrent_order_cap(
-    order_service, delivery_service, agent, user, khoya
+    order_service, delivery_service, agent, user, khoya, monkeypatch
 ):
+    # AAD-BIZ-002's own per-user COD cap defaults to 2 active orders, well
+    # under _MAX_CONCURRENT_ORDERS + 1 — this test's subject is the agent's
+    # capacity, not the customer's, so it's raised out of the way rather
+    # than spreading these orders across several customers.
+    monkeypatch.setattr(settings, "cod_max_active_orders_per_user", _MAX_CONCURRENT_ORDERS + 1)
     orders = [
         await _make_order(order_service, user, "KHOYA-250G", f"cap-{i}")
         for i in range(_MAX_CONCURRENT_ORDERS + 1)
@@ -207,8 +217,9 @@ async def test_accept_enforces_the_concurrent_order_cap(
 
 
 async def test_releasing_one_makes_room_under_the_cap(
-    order_service, delivery_service, agent, user, khoya
+    order_service, delivery_service, agent, user, khoya, monkeypatch
 ):
+    monkeypatch.setattr(settings, "cod_max_active_orders_per_user", _MAX_CONCURRENT_ORDERS + 1)
     orders = [
         await _make_order(order_service, user, "KHOYA-250G", f"cap-release-{i}")
         for i in range(_MAX_CONCURRENT_ORDERS + 1)
@@ -224,8 +235,9 @@ async def test_releasing_one_makes_room_under_the_cap(
 
 
 async def test_cap_is_per_agent_not_global(
-    order_service, delivery_service, agent, agent2, user, khoya
+    order_service, delivery_service, agent, agent2, user, khoya, monkeypatch
 ):
+    monkeypatch.setattr(settings, "cod_max_active_orders_per_user", _MAX_CONCURRENT_ORDERS + 1)
     orders = [
         await _make_order(order_service, user, "KHOYA-250G", f"cap-peragent-{i}")
         for i in range(_MAX_CONCURRENT_ORDERS + 1)
@@ -260,6 +272,9 @@ async def test_unlocated_requests_are_capped_not_unfiltered(
     module constant down to 3 so the test doesn't need to create 20+ real
     orders to exercise it."""
     monkeypatch.setattr(delivery_service_module, "_UNLOCATED_FALLBACK_LIMIT", 3)
+    # AAD-BIZ-002's per-user COD cap (default 2) would otherwise stop this
+    # single customer from placing all 5 of the orders this test needs.
+    monkeypatch.setattr(settings, "cod_max_active_orders_per_user", 5)
 
     orders = [
         await _make_order(order_service, user, "MILK-COW-1L", f"unlocated-{i}")

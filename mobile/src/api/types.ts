@@ -17,6 +17,16 @@ export type PaymentStatus =
 
 export type PaymentMethod = 'online' | 'cod';
 
+// AAD-API-004: the shape GET /orders and the (staff-only, not used from this
+// app today) order queue now return instead of a bare array — `has_more`
+// says whether there's a next page rather than staying silent about a cut,
+// and `next_cursor` is what to send back as `before`/`after` to fetch it.
+export interface Page<T> {
+  items: T[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
 export interface Category {
   slug: string;
   name: string;
@@ -63,13 +73,21 @@ export interface QuoteLine {
   line_total_paise: number;
   adjusted_from_qty: number | null;
   unavailable_reason: string | null;
+  // AAD-QUAL-013: how many of this SKU can be sold right now — always
+  // present, not just when adjusted_from_qty is set — so the cart's own
+  // quantity stepper can enforce the real ceiling instead of a placeholder
+  // that only ever disabled it.
+  max_qty: number;
+  // 'out_of_stock' (fewer remain than requested) vs 'quantity_limit' (stock
+  // is fine; the per-order cap is what bound) — null when qty wasn't
+  // reduced at all.
+  adjustment_reason: 'out_of_stock' | 'quantity_limit' | null;
 }
 
 export interface Quote {
   lines: QuoteLine[];
   subtotal_paise: number;
   delivery_fee_paise: number;
-  discount_paise: number;
   total_paise: number;
   currency: string;
   free_delivery_threshold_paise: number;
@@ -132,7 +150,6 @@ export interface OrderView {
   lines: OrderLine[];
   subtotal_paise: number;
   delivery_fee_paise: number;
-  discount_paise: number;
   total_paise: number;
   currency: string;
   address: Address;
@@ -147,6 +164,13 @@ export interface OrderView {
   // its destination needs a person, not a form. See order-edit-address.tsx.
   can_edit_address: boolean;
   delivery_agent_location: AgentLocation | null;
+  // AAD-SEC-027: the in-app proof-of-delivery code — set only while the
+  // order is genuinely out_for_delivery and the code hasn't expired (see
+  // OrderService._delivery_code_if_usable on the backend). Read this out
+  // to a delivery agent standing at the door; never shown anywhere on the
+  // agent's own side of the app (DeliveryOrderView below has no such
+  // field at all).
+  delivery_code: string | null;
 }
 
 export interface UserProfile {

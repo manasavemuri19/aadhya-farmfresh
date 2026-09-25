@@ -73,3 +73,33 @@ export async function registerForPushNotifications(): Promise<void> {
     registering = false;
   }
 }
+
+/**
+ * AAD-SEC-032: called from session.ts's signOut(), alongside the existing
+ * keychain clear. Without this, a shared, resold or returned handset keeps
+ * receiving the previous account's order notifications until someone else
+ * signs in and happens to re-register the same token.
+ *
+ * `getExpoPushTokenAsync` is safe to call again here even though
+ * `registerForPushNotifications` already called it earlier in this
+ * session: permission is already resolved by this point (granted or not),
+ * so this only ever reads the same local token back, no re-prompt and no
+ * new registration. Same best-effort contract as registration — sign-out
+ * must never fail or block because a notification token couldn't be
+ * reached.
+ */
+export async function deregisterPushNotifications(): Promise<void> {
+  if (!Device.isDevice) return;
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    if (status !== 'granted') return;
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
+    const { data: token } = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
+    await notificationsApi.deregisterToken(token);
+  } catch {
+    // Best-effort — see the doc comment above.
+  }
+}
