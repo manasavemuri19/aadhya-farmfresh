@@ -24,7 +24,6 @@ from contextlib import asynccontextmanager, suppress  # noqa: E402
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
@@ -32,6 +31,7 @@ from app.api.middleware import (  # noqa: E402
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
+    TrustedHostExceptHealthMiddleware,
 )
 from app.api.v1.router import API_V1_PREFIX, api_router  # noqa: E402
 from app.core.errors import AppError  # noqa: E402
@@ -288,7 +288,13 @@ app.add_middleware(BodySizeLimitMiddleware)
 # by construction (`assert_deploy_safe` refuses a wildcard or a local/test
 # host in staging or production), so this can't silently degrade into an
 # allow-everything no-op the way an unvalidated allowlist could.
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
+#
+# Wrapped rather than used directly (see TrustedHostExceptHealthMiddleware's
+# own docstring): Railway's infrastructure health-check hits /v1/health/live
+# over its private network with a Host header that will never be in this
+# app's public allowlist, and a rejected health check reads as "unhealthy" —
+# discovered as a real production crash-loop, not a hypothetical.
+app.add_middleware(TrustedHostExceptHealthMiddleware, allowed_hosts=settings.allowed_host_list)
 
 
 @app.exception_handler(AppError)

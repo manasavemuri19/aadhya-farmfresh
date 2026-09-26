@@ -8,6 +8,7 @@ import time
 import uuid
 
 from fastapi import Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.router import API_V1_PREFIX
@@ -232,6 +233,41 @@ class BodySizeLimitMiddleware:
             await self.app(scope, limited_receive, send)
         except _BodyTooLargeError:
             await _reject_too_large(send)
+
+
+class TrustedHostExceptHealthMiddleware:
+    """`TrustedHostMiddleware` (AAD-SEC-017), with the two health-check
+    routes exempted from the Host check entirely.
+
+    Found the hard way in production: Railway's own infrastructure probes
+    this service's `/v1/health/live` over its private network to decide
+    whether to keep the container running, and that probe's Host header
+    does not match this app's public domain — there is no reason it should,
+    since Railway controls both ends of that request and it never passes
+    through anything a customer's traffic does. Once `ALLOWED_HOSTS` was
+    correctly tightened to drop the local/test hosts `AAD-OPS-008` flagged,
+    every one of those probes started getting rejected with `400 Invalid
+    host header`, Railway read that as "unhealthy," and killed the
+    container — turning a config fix into a genuine crash-loop outage
+    (exactly the failure mode `AAD-OPS-006` describes, from a new cause).
+
+    Exempting these two paths costs nothing `AAD-SEC-017` was written to
+    prevent: neither route builds an absolute URL from the Host header,
+    looks anything up keyed on it, or returns anything but a fixed,
+    non-sensitive `{"status": ...}` body (AAD-SEC-019 already stripped the
+    one field that used to leak `env`). Every other route — including
+    `/v1/health`'s own database check — is still fully protected.
+    """
+
+    def __init__(self, app: ASGIApp, *, allowed_hosts: list[str]) -> None:
+        self._inner = TrustedHostMiddleware(app, allowed_hosts=allowed_hosts)
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path") in _UNLOGGED_PATHS:
+            await self._app(scope, receive, send)
+            return
+        await self._inner(scope, receive, send)
 
 
 async def _reject_too_large(send: Send) -> None:
