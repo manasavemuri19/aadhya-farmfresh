@@ -1,7 +1,7 @@
 import { api } from './client';
 import type {
-  Address, AdminProduct, CatalogResponse, DeliveryOrderView, OrderStatus, OrderView, Page,
-  ProductView, Quote, TokenPair, UserProfile,
+  Address, AdminProduct, CatalogResponse, DeliveryOrderView, DeliveryRequestView, OrderStatus,
+  OrderView, Page, ProductView, Quote, TokenPair, UserProfile,
 } from './types';
 
 export interface CartLineInput { sku: string; qty: number }
@@ -128,7 +128,10 @@ export const adminApi = {
 export const deliveryApi = {
   // Paid, unassigned orders within (an expanding) range of the agent's last
   // reported location — see requests.tsx for how that location gets there.
-  listRequests: () => api.get<DeliveryOrderView[]>('/delivery/requests', true),
+  // AAD-SEC-030: the backend deliberately returns the lean
+  // DeliveryRequestView here, not DeliveryOrderView — no address, no notes,
+  // no order value, until the agent actually accepts.
+  listRequests: () => api.get<DeliveryRequestView[]>('/delivery/requests', true),
   listOngoing: () => api.get<DeliveryOrderView[]>('/delivery/ongoing', true),
   // 409 if someone else's accept landed first — see requests.tsx for how
   // that's surfaced (not a validation error, just "it's gone now").

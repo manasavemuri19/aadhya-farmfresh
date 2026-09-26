@@ -13,7 +13,7 @@ import { deliveryApi } from '../../src/api/endpoints';
 import { ApiError } from '../../src/api/client';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { DeliveryOrderView, OrderStatus } from '../../src/api/types';
+import type { DeliveryOrderView, DeliveryRequestView, OrderStatus } from '../../src/api/types';
 
 const ONGOING_LABEL: Partial<Record<OrderStatus, string>> = {
   confirmed: 'Preparing',
@@ -171,7 +171,7 @@ export default function RequestsScreen() {
     };
   }, [hasActiveDeliveries, appActive, queryClient]);
 
-  const accept = async (order: DeliveryOrderView) => {
+  const accept = async (order: DeliveryRequestView) => {
     setAcceptError(null);
     setAccepting(order.id);
     try {
@@ -251,7 +251,7 @@ export default function RequestsScreen() {
   }
 
   const ongoingList = ongoing.data ?? [];
-  const requestsList = (requests.data ?? []).filter((o: DeliveryOrderView) => !dismissedIds.has(o.id));
+  const requestsList = (requests.data ?? []).filter((o: DeliveryRequestView) => !dismissedIds.has(o.id));
 
   return (
     <>
@@ -350,7 +350,7 @@ export default function RequestsScreen() {
       }
       renderItem={({ item }) => (
         <View style={styles.card}>
-          <RequestCardBody order={item} />
+          <NewRequestCardBody order={item} />
           <View style={styles.actionRow}>
             <Button
               label="Decline"
@@ -385,6 +385,25 @@ export default function RequestsScreen() {
       onClose={() => setVerifyingOrder(null)}
     />
     </>
+  );
+}
+
+// AAD-SEC-030: the pre-accept card — deliberately shows only what
+// DeliveryRequestView actually carries (order number, distance, item
+// count). No address, no notes, no order value: that's the whole point of
+// the leaner backend shape, so this mirrors it rather than reaching for
+// fields that don't exist on this object until after accept.
+function NewRequestCardBody({ order }: { order: DeliveryRequestView }) {
+  return (
+    <View style={styles.cardBody}>
+      <View style={styles.cardTopRow}>
+        <Text style={styles.orderNumber}>#{order.order_number}</Text>
+        <Text style={styles.distance}>
+          {order.distance_km != null ? `~${order.distance_km} km away` : 'Distance unknown'}
+        </Text>
+      </View>
+      <Text variant="caption">{order.item_count} item{order.item_count === 1 ? '' : 's'}</Text>
+    </View>
   );
 }
 

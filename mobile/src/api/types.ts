@@ -230,3 +230,18 @@ export interface DeliveryOrderView {
   /** null = distance unknown (no coordinates to compare), never "hidden". */
   distance_km: number | null;
 }
+
+/** AAD-SEC-030: what GET /delivery/requests actually returns — deliberately
+ * leaner than DeliveryOrderView above, so a pending, unaccepted request
+ * never reveals the customer's address, notes or order value. Mirrors the
+ * backend's DeliveryRequestView field-for-field; this used to be typed (and
+ * rendered) as a DeliveryOrderView, which crashed the Requests screen the
+ * moment a real pending request came back with no `address` to read
+ * `.line1` off of. */
+export interface DeliveryRequestView {
+  id: string;
+  order_number: string;
+  item_count: number;
+  created_at: string;
+  distance_km: number | null;
+}
