@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+// AAD-MOB-029: no react-native-maps import on this screen any more — see
+// the "Live location" card below for why.
 
 import { Text } from '../../src/components/Text';
 import { Button } from '../../src/components/Button';
@@ -75,23 +76,33 @@ function etaText(data: OrderView, now: number): string | null {
 }
 
 /**
- * A region covering both the agent and the destination, so the map opens
- * already framed on the whole trip rather than one corner of it. Falls back
- * to just centring on the agent when the address has no coordinates on file
- * (an old order, or a hand-typed address) — nothing to frame a pair around.
+ * Straight-line distance in km between the agent and the drop-off (haversine).
+ * Not a road distance — an honest "roughly how far" for the tracking card,
+ * computed on the phone so it needs no Maps API key or network call.
  */
-function regionFor(agent: AgentLocation, address: Address): Region {
-  if (address.latitude == null || address.longitude == null) {
-    return { latitude: agent.latitude, longitude: agent.longitude, latitudeDelta: 0.02, longitudeDelta: 0.02 };
-  }
-  const latitude = (agent.latitude + address.latitude) / 2;
-  const longitude = (agent.longitude + address.longitude) / 2;
-  // 2.5x the raw span plus a floor, so two very close points (the agent has
-  // nearly arrived) still get a sensible amount of surrounding context
-  // rather than a comically over-zoomed map.
-  const latitudeDelta = Math.max(Math.abs(agent.latitude - address.latitude) * 2.5, 0.02);
-  const longitudeDelta = Math.max(Math.abs(agent.longitude - address.longitude) * 2.5, 0.02);
-  return { latitude, longitude, latitudeDelta, longitudeDelta };
+function distanceKm(agent: AgentLocation, address: Address): number | null {
+  if (address.latitude == null || address.longitude == null) return null;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(address.latitude - agent.latitude);
+  const dLon = toRad(address.longitude - agent.longitude);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(agent.latitude)) * Math.cos(toRad(address.latitude)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Opens the agent's live position in the Google Maps app (or browser) —
+ * as a route to the customer's address when coordinates are on file,
+ * otherwise as a pin. A plain URL: no API key, no native module.
+ */
+function openAgentInMaps(agent: AgentLocation, address: Address): void {
+  const from = `${agent.latitude},${agent.longitude}`;
+  const url =
+    address.latitude != null && address.longitude != null
+      ? `https://www.google.com/maps/dir/?api=1&origin=${from}&destination=${address.latitude},${address.longitude}&travelmode=driving`
+      : `https://www.google.com/maps/search/?api=1&query=${from}`;
+  void Linking.openURL(url);
 }
 
 export default function OrderScreen() {
@@ -99,7 +110,6 @@ export default function OrderScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const now = useNow(30_000);
-  const mapRef = useRef<MapView>(null);
 
   const order = useQuery({
     queryKey: ['order', id],
@@ -114,16 +124,7 @@ export default function OrderScreen() {
     },
   });
 
-  // Re-centres the map as the agent's reported location moves on each 5s
-  // poll — `initialRegion` alone only frames the map once, on first render,
-  // and would otherwise leave a live-tracking map staring at a stale spot.
   const agentLocation = order.data?.delivery_agent_location ?? null;
-  const address = order.data?.address;
-  useEffect(() => {
-    if (agentLocation && address && mapRef.current) {
-      mapRef.current.animateToRegion(regionFor(agentLocation, address), 500);
-    }
-  }, [agentLocation, address]);
 
   const cancel = useMutation({
     mutationFn: (reason: string) => ordersApi.cancel(id, reason),
@@ -199,26 +200,37 @@ export default function OrderScreen() {
       {data.status === 'out_for_delivery' && (
         <View style={styles.card}>
           <Text variant="label" style={styles.cardTitle}>Live location</Text>
+          {/* AAD-MOB-029: this used to be an embedded react-native-maps
+              MapView (Google provider). That native view hard-crashes the
+              whole app on Android — not a JS error, so no ErrorBoundary can
+              catch it — when the APK was built without a Google Maps API
+              key, and this build has none: the old key leaked via the repo
+              and was revoked (see app.config.js). It only started crashing
+              now because agent location reporting finally works (the
+              permission-loop fix), so `agentLocation` is non-null and the
+              MapView actually renders. Same root cause as the original
+              "pin my location on a map" crash. Replaced with distance +
+              "Track on Google Maps", which keeps live tracking working with
+              no key and no native map. The embedded map can return once a
+              new restricted key is set as an EAS env var and the APK rebuilt. */}
           {agentLocation ? (
-            <MapView
-              ref={mapRef}
-              provider={PROVIDER_GOOGLE}
-              style={styles.map}
-              initialRegion={regionFor(agentLocation, data.address)}
-            >
-              <Marker
-                coordinate={{ latitude: agentLocation.latitude, longitude: agentLocation.longitude }}
-                title="Delivery agent"
-                pinColor={color.primary}
+            <>
+              <Text variant="body">
+                {(() => {
+                  const km = distanceKm(agentLocation, data.address);
+                  return km == null
+                    ? 'Your delivery partner is on the way.'
+                    : km < 0.2
+                      ? 'Your delivery partner is almost at your door.'
+                      : `Your delivery partner is about ${km < 10 ? km.toFixed(1) : Math.round(km)} km away.`;
+                })()}
+              </Text>
+              <Button
+                label="Track on Google Maps"
+                variant="secondary"
+                onPress={() => openAgentInMaps(agentLocation, data.address)}
               />
-              {data.address.latitude != null && data.address.longitude != null && (
-                <Marker
-                  coordinate={{ latitude: data.address.latitude, longitude: data.address.longitude }}
-                  title="Delivering to"
-                  pinColor={color.leaf}
-                />
-              )}
-            </MapView>
+            </>
           ) : (
             <Text variant="caption" tone="muted">
               Waiting for the delivery agent's live location…
@@ -334,7 +346,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: space.xs,
   },
-  map: { width: '100%', height: 220, borderRadius: radius.md, overflow: 'hidden' },
   editAddressLink: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.primary, marginTop: 2 },
   line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: space.md },
   lineBody: { flex: 1, gap: 2 },
