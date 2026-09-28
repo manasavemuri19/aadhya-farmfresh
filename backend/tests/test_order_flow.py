@@ -234,14 +234,39 @@ async def test_cancelling_returns_stock_exactly_once(order_service, user, produc
         request=order_request([("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD),
         idempotency_key=None,
     )
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-003: a placed (COD = confirmed) order is no longer
+    # customer-cancellable, so this now exercises the staff cancel path —
+    # the stock-release-exactly-once guarantee under test is the same
+    # `_cancel` either way.
+    # await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED, note="staff cancel", actor="staff"
+    )
 
     assert await stock_of(products, "MILK-COW-1L") == 5
 
     # A second cancel must not credit stock again.
     with pytest.raises(Exception):
-        await order_service.cancel(order_id=order.id, user_id=user["id"], reason="again")
+        await order_service.update_status(
+            order_id=order.id, new_status=OrderStatus.CANCELLED, note="again", actor="staff"
+        )
     assert await stock_of(products, "MILK-COW-1L") == 5
+
+
+async def test_customer_cannot_cancel_a_placed_order(order_service, user, products, milk):
+    """AAD-BIZ-003: once placed (COD confirms immediately), no customer cancel."""
+    from app.core.errors import Forbidden
+
+    order = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD),
+        idempotency_key=None,
+    )
+    assert order.can_cancel is False
+    with pytest.raises(Forbidden):
+        await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # Nothing was released — the 3 units stay reserved for this order.
+    assert await stock_of(products, "MILK-COW-1L") == 2
 
 
 async def test_cancelling_after_dispatch_does_not_restock(order_service, user, orders, products, milk):

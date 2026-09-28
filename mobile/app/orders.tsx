@@ -38,8 +38,21 @@ export default function OrdersScreen() {
   // cursor the repository already supported. This screen now walks that
   // cursor with react-query's own pagination primitive rather than
   // fetching everything at once.
+  //
+  // AAD-MOB-030: the actual cause of "My orders" always showing "Something
+  // went wrong". This used the exact same ['orders'] key as
+  // useActiveOrders (the tracker bars — mounted on every tab, polling every
+  // 15s), but that hook stores a plain page ({ items, next_cursor }) under
+  // it while this infinite query expects { pages: [...] }. Same key means
+  // same cache entry, so this screen opened onto the tracker's page object,
+  // `orders.data.pages` was undefined, `.flatMap` threw, and the error
+  // boundary caught it — every time, because the tracker had always
+  // already filled that cache first. Railway saw clean 200s because the
+  // request was fine; the crash was purely the cache shape. Each query now
+  // has its own key; both still start with 'orders', so every existing
+  // invalidateQueries({ queryKey: ['orders'] }) refreshes both as before.
   const orders = useInfiniteQuery({
-    queryKey: ['orders'],
+    queryKey: ['orders', 'history'],
     queryFn: ({ pageParam }: { pageParam?: string }) => ordersApi.list(pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined),

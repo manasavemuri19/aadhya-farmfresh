@@ -32,8 +32,12 @@ export function useActiveOrders(): OrderView[] {
   const role = useSession((s) => s.user?.role);
   const isDeliveryAgent = role === 'delivery_agent';
 
+  // AAD-MOB-030: own key, not the bare ['orders'] — orders.tsx's infinite
+  // query used to share that exact key with a different data shape, which
+  // is what crashed "My orders". Still under the 'orders' prefix, so every
+  // invalidateQueries({ queryKey: ['orders'] }) refreshes this as before.
   const orders = useQuery({
-    queryKey: ['orders'],
+    queryKey: ['orders', 'active'],
     queryFn: () => ordersApi.list(),
     refetchInterval: 15_000,
     enabled: !isDeliveryAgent,

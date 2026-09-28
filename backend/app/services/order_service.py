@@ -853,8 +853,15 @@ class OrderService:
 
         current = OrderStatus(order["status"])
         if current not in CUSTOMER_CANCELLABLE:
+            # AAD-BIZ-003: paid/placed orders are no longer customer-
+            # cancellable at all (see CUSTOMER_CANCELLABLE), so the old
+            # "already left the farm" wording no longer describes why.
+            # raise Forbidden(
+            #     "This order has already left the farm. Call us and we will sort it out."
+            # )
             raise Forbidden(
-                "This order has already left the farm. Call us and we will sort it out."
+                "Orders can't be cancelled once they're placed. "
+                "Please contact us if something's wrong with your order."
             )
         updated = await self._cancel(
             order, note=reason or "Cancelled by customer", actor=user_id

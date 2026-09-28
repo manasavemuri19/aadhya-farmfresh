@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+// AAD-BIZ-003: useMutation/useQueryClient were only used by the customer
+// cancel below, now commented out. Previous import:
+// import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 // AAD-MOB-029: no react-native-maps import on this screen any more — see
 // the "Live location" card below for why.
 
@@ -108,7 +111,7 @@ function openAgentInMaps(agent: AgentLocation, address: Address): void {
 export default function OrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const queryClient = useQueryClient();
+  // const queryClient = useQueryClient(); // AAD-BIZ-003: only used by cancel
   const now = useNow(30_000);
 
   const order = useQuery({
@@ -126,13 +129,18 @@ export default function OrderScreen() {
 
   const agentLocation = order.data?.delivery_agent_location ?? null;
 
-  const cancel = useMutation({
-    mutationFn: (reason: string) => ordersApi.cancel(id, reason),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['order', id] });
-      void queryClient.invalidateQueries({ queryKey: ['orders'] });
-    },
-  });
+  // AAD-BIZ-003 (product decision): customers can't cancel a placed/paid
+  // order from the app — Zepto/Blinkit model. The backend enforces this
+  // (can_cancel is now always false past pending_payment, and the cancel
+  // endpoint refuses), so this is just the UI half. Kept commented, not
+  // deleted, in case the decision is reversed.
+  // const cancel = useMutation({
+  //   mutationFn: (reason: string) => ordersApi.cancel(id, reason),
+  //   onSuccess: () => {
+  //     void queryClient.invalidateQueries({ queryKey: ['order', id] });
+  //     void queryClient.invalidateQueries({ queryKey: ['orders'] });
+  //   },
+  // });
 
   if (order.isPending) return <Loading />;
   if (order.isError) {
@@ -287,6 +295,8 @@ export default function OrderScreen() {
         )}
       </View>
 
+      {/* AAD-BIZ-003: customer cancel removed (see the commented-out
+          mutation above).
       {data.can_cancel && (
         <Button
           label="Cancel this order"
@@ -301,6 +311,7 @@ export default function OrderScreen() {
           {cancel.error instanceof Error ? cancel.error.message : 'Could not cancel.'}
         </Text>
       )}
+      */}
 
       <Button
         label="Back to shop"

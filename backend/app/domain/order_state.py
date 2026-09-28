@@ -72,9 +72,24 @@ def releases_stock(from_status: OrderStatus, to_status: OrderStatus) -> bool:
     return from_status in _NOT_YET_DISPATCHED
 
 # Statuses the customer is still allowed to cancel from without calling the farm.
-CUSTOMER_CANCELLABLE: frozenset[OrderStatus] = frozenset(
-    {OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED, OrderStatus.PACKED}
-)
+#
+# AAD-BIZ-003 (product decision, 2026-09-28): quick-commerce model, same as
+# Zepto/Blinkit — once an order is placed and paid (online captured, or a COD
+# order, which is confirmed the moment it's placed), the customer can no
+# longer cancel it from the app. Only an unpaid PENDING_PAYMENT order stays
+# customer-cancellable: no money has moved, and cancelling it just releases
+# the reserved stock sooner than the 20-minute hold sweep would.
+#
+# Scope is the *customer* cancel only. Staff cancellation (update_status →
+# CANCELLED), the hold-expiry sweep, and every automatic refund path (late
+# payment after expiry, amount mismatch, orphaned link) are untouched and
+# must stay that way — those protect real money.
+#
+# Previous rule, kept for reference in case this decision is reversed:
+# CUSTOMER_CANCELLABLE: frozenset[OrderStatus] = frozenset(
+#     {OrderStatus.PENDING_PAYMENT, OrderStatus.CONFIRMED, OrderStatus.PACKED}
+# )
+CUSTOMER_CANCELLABLE: frozenset[OrderStatus] = frozenset({OrderStatus.PENDING_PAYMENT})
 
 TERMINAL: frozenset[OrderStatus] = frozenset(
     {OrderStatus.DELIVERED, OrderStatus.REFUNDED}
