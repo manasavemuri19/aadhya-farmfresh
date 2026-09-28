@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react';
-import { BackHandler, KeyboardAvoidingView, Platform, TextInput, View, StyleSheet } from 'react-native';
+import { BackHandler, Pressable, View, StyleSheet } from 'react-native';
 
 import { Text } from './Text';
 import { Button } from './Button';
 import { deliveryApi } from '../api/endpoints';
 import { color, font, radius, size, space } from '../theme/tokens';
+
+const KEYPAD_ROWS = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['', '0', '⌫'],
+] as const;
 
 interface Props {
   /** null when there's nothing to verify — also used as the "closed" state,
@@ -24,25 +31,23 @@ interface Props {
  * actually confirmed (onVerified) or the sheet was dismissed (onClose) —
  * the caller doesn't need to track submitting/error state of its own.
  *
- * AAD-MOB-027: this used to be RN's own <Modal>. On Android, Modal opens a
- * *second* native Window stacked on top of the Activity's — and that
- * second window fighting the main one for IME (keyboard) ownership is a
- * long-documented RN/Android interaction bug: the keyboard shows, Android
- * decides the other window should have it, hides it, this TextInput
- * re-requests focus, it shows again — a rapid open/close loop, worse on
- * some OEM keyboards (the OnePlus Nord CE4's Gboard build included) than
- * stock Android. That's exactly what the screen recording showed: the
- * keyboard flickering in and out on its own, nothing ever actually typed.
- * There was nothing to debounce or pause here — it isn't a re-render
- * problem, it's this specific Android + Modal combination. Rendered as a
- * plain absolutely-positioned overlay instead, it lives in the same single
- * window as the rest of the screen, so there's no second window to fight
- * the keyboard over. `BackHandler` below replaces the dismiss-on-Android-
- * back-button behaviour Modal used to give for free.
+ * AAD-MOB-027: this used to open the OS software keyboard through a
+ * `TextInput`. Removing RN's `<Modal>` (the previous fix, still correct —
+ * this stays a plain overlay, not a Modal, so there's no second Android
+ * window in the mix) did not stop the flicker a screen recording had
+ * shown, which means it was never the Modal specifically — it's the
+ * on-screen keyboard itself misbehaving on this device (confirmed
+ * happening on a OnePlus Nord CE4's Gboard). Rather than keep chasing why
+ * Android's IME flickers here, this sidesteps it entirely: a custom in-app
+ * number pad (plain `Pressable`s) fills the same 4-digit `code` state a
+ * `TextInput` used to, with no software keyboard involved at any point —
+ * there's nothing left for the OS keyboard to flicker, because it never
+ * opens. `BackHandler` replaces the dismiss-on-Android-back-button
+ * behaviour Modal used to give for free, from back when this was one.
  *
  * Rendered as a centered card over a dimmed backdrop rather than a full
  * slide-up sheet (LocationPickerModal's style): this is a single 4-digit
- * field entered standing at someone's door, not a screen to browse.
+ * code entered standing at someone's door, not a screen to browse.
  */
 export function VerifyDeliveryModal({ order, onVerified, onClose }: Props) {
   if (!order) return null;
@@ -90,50 +95,72 @@ function VerifyDeliveryFields({
     }
   };
 
+  const pressKey = (key: string) => {
+    if (submitting) return;
+    setError(null);
+    if (key === '⌫') {
+      setCode((c) => c.slice(0, -1));
+    } else if (key && code.length < 4) {
+      setCode((c) => c + key);
+    }
+  };
+
   return (
     <View style={styles.backdrop}>
-      <KeyboardAvoidingView
-        style={styles.avoider}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={styles.card}>
-          <Text variant="title">Confirm delivery</Text>
-          <Text variant="caption" style={styles.hint}>
-            Ask the customer for the 4-digit code shown in their Aadya app for order #
-            {order.order_number}, then enter it below.
-          </Text>
+      <View style={styles.card}>
+        <Text variant="title">Confirm delivery</Text>
+        <Text variant="caption" style={styles.hint}>
+          Ask the customer for the 4-digit code shown in their Aadya app for order #
+          {order.order_number}, then enter it using the keypad below.
+        </Text>
 
-          <TextInput
-            value={code}
-            onChangeText={(t) => {
-              setError(null);
-              setCode(t.replace(/\D/g, '').slice(0, 4));
-            }}
-            keyboardType="number-pad"
-            maxLength={4}
-            placeholder="0000"
-            style={styles.input}
-            autoFocus
-            accessibilityLabel="Delivery code"
-          />
-
-          {error && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
+        <View style={styles.digitRow} accessible accessibilityLabel={`Delivery code, ${code.length} of 4 digits entered`}>
+          {[0, 1, 2, 3].map((i) => (
+            <View key={i} style={[styles.digitBox, i < code.length && styles.digitBoxFilled]}>
+              <Text style={styles.digitText}>{code[i] ?? ''}</Text>
             </View>
-          )}
-
-          <Button
-            label={submitting ? 'Verifying…' : 'Verify & mark delivered'}
-            disabled={!codeValid || submitting}
-            loading={submitting}
-            onPress={() => void verify()}
-          />
-          <Text style={styles.cancelLink} onPress={submitting ? undefined : onClose}>
-            Cancel
-          </Text>
+          ))}
         </View>
-      </KeyboardAvoidingView>
+
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
+        <View style={styles.keypad}>
+          {KEYPAD_ROWS.map((row, rowIndex) => (
+            <View key={rowIndex} style={styles.keypadRow}>
+              {row.map((key, keyIndex) =>
+                key ? (
+                  <Pressable
+                    key={key}
+                    onPress={() => pressKey(key)}
+                    disabled={submitting}
+                    accessibilityRole="button"
+                    accessibilityLabel={key === '⌫' ? 'Backspace' : `Digit ${key}`}
+                    style={({ pressed }) => [styles.key, pressed && styles.keyPressed]}
+                  >
+                    <Text style={styles.keyText}>{key}</Text>
+                  </Pressable>
+                ) : (
+                  <View key={`${rowIndex}-blank`} style={styles.key} />
+                ),
+              )}
+            </View>
+          ))}
+        </View>
+
+        <Button
+          label={submitting ? 'Verifying…' : 'Verify & mark delivered'}
+          disabled={!codeValid || submitting}
+          loading={submitting}
+          onPress={() => void verify()}
+        />
+        <Text style={styles.cancelLink} onPress={submitting ? undefined : onClose}>
+          Cancel
+        </Text>
+      </View>
     </View>
   );
 }
@@ -155,7 +182,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: space.lg,
   },
-  avoider: { width: '100%', alignItems: 'center' },
   card: {
     width: '100%',
     maxWidth: 360,
@@ -165,19 +191,36 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   hint: { marginBottom: space.xs },
-  input: {
-    backgroundColor: color.surface,
+  digitRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: space.sm,
+    marginVertical: space.xs,
+  },
+  digitBox: {
+    width: 48,
+    height: 56,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: color.line,
-    paddingHorizontal: space.md,
-    minHeight: 56,
-    fontFamily: font.monoBold,
-    fontSize: 28,
-    letterSpacing: 8,
-    textAlign: 'center',
-    color: color.ink,
+    backgroundColor: color.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  digitBoxFilled: { borderColor: color.primary },
+  digitText: { fontFamily: font.monoBold, fontSize: 28, color: color.ink },
+  keypad: { gap: space.sm },
+  keypadRow: { flexDirection: 'row', justifyContent: 'center', gap: space.sm },
+  key: {
+    width: 64,
+    height: 52,
+    borderRadius: radius.md,
+    backgroundColor: color.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  keyPressed: { backgroundColor: color.line },
+  keyText: { fontFamily: font.monoBold, fontSize: size.lg, color: color.ink },
   errorBox: {
     backgroundColor: color.discountSoft,
     borderRadius: radius.md,
