@@ -138,7 +138,17 @@ class RazorpayProvider(PaymentProvider):
             "notes": notes,
             "callback_url": settings.razorpay_callback_url,
             "callback_method": "get",
-            "partial_payment": False,
+            # AAD-PAY-018: this field is `accept_partial`, not `partial_payment`
+            # — the wrong name here (present since this integration was first
+            # written) meant Razorpay rejected every single online-payment
+            # order with `BadRequestError: extra fields sent`, since the
+            # Payment Links API validates the request body strictly and has
+            # no field by that name. Confirmed against Razorpay's own API
+            # reference, not assumed. AAD-PAY-013's classification of that
+            # error (a code bug, not a retryable gateway hiccup — see the
+            # `except BadRequestError` block below) was working exactly as
+            # designed; it surfaced this rather than silently swallowing it.
+            "accept_partial": False,
         }
         if expires_at is not None:
             body["expire_by"] = int(expires_at.timestamp())

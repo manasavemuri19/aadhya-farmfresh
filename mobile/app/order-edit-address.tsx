@@ -160,14 +160,6 @@ export default function OrderEditAddressScreen() {
             {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
-        <Pressable
-          onPress={() => setPickerVisible(true)}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.mapButton, pressed && styles.locationButtonPressed]}
-        >
-          <Text style={styles.mapButtonText}>🗺️ Pin the exact spot on a map</Text>
-        </Pressable>
-
         <Field
           label="Flat, building and street"
           value={line1}
@@ -207,13 +199,6 @@ export default function OrderEditAddressScreen() {
           onPress={() => save.mutate()}
         />
       </View>
-
-      <LocationPickerModal
-        visible={pickerVisible}
-        initialCoords={coords}
-        onConfirm={applyPickedLocation}
-        onClose={() => setPickerVisible(false)}
-      />
     </KeyboardAvoidingView>
   );
 }

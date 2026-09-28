@@ -273,15 +273,6 @@ export default function RequestsScreen() {
             </View>
           )}
 
-          {!locationDenied && !hasActiveDeliveries && (
-            <View style={styles.locationNotice}>
-              <Text variant="caption" style={styles.locationNoticeText}>
-                Location sharing is paused, so requests below are not sorted by distance. It
-                resumes automatically once you accept a delivery.
-              </Text>
-            </View>
-          )}
-
           {ongoingList.length > 0 && (
             <>
               <Text variant="label" style={styles.sectionLabel}>Ongoing</Text>

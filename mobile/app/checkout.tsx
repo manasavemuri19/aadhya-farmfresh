@@ -298,14 +298,6 @@ export default function CheckoutScreen() {
             {locationStatus === 'locating' ? '📍 Finding your location…' : '📍 Use my current location'}
           </Text>
         </Pressable>
-        <Pressable
-          onPress={() => setPickerVisible(true)}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.mapButton, pressed && styles.locationButtonPressed]}
-        >
-          <Text style={styles.mapButtonText}>🗺️ Pin the exact spot on a map</Text>
-        </Pressable>
-
         <Field
           label="Flat, building and street"
           value={line1}
@@ -391,15 +383,6 @@ export default function CheckoutScreen() {
           onPress={() => placeOrder.mutate()}
         />
       </View>
-
-      <LocationPickerModal
-        visible={pickerVisible}
-        initialCoords={coords ?? (locationLatitude != null && locationLongitude != null
-          ? { latitude: locationLatitude, longitude: locationLongitude }
-          : null)}
-        onConfirm={applyPickedLocation}
-        onClose={() => setPickerVisible(false)}
-      />
     </KeyboardAvoidingView>
   );
 }
