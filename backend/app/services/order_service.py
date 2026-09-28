@@ -88,7 +88,20 @@ from app.services.push_service import PushService
 
 log = logging.getLogger(__name__)
 
-PAYMENT_HOLD = timedelta(minutes=15)
+# AAD-PAY-019: Razorpay's Payment Links API hard-rejects `expire_by` with
+# "timestamp must be atleast 15 minutes in future" — a check performed
+# against the time Razorpay receives the request, not the time this app
+# computed `now`. This hold's expiry is handed to Razorpay as that exact
+# `expire_by` (see RazorpayProvider.create_order and AAD-PAY-006/014, below)
+# so the app and the gateway never disagree about when a payment is dead —
+# but with this at exactly 15 minutes, the DB work and network hop between
+# computing `now` and Razorpay actually receiving the request (typically a
+# few hundred milliseconds, worse under load) reliably ate enough of that
+# window to land on the wrong side of Razorpay's own boundary, and every
+# single online order failed with a 500 as a result. 20 minutes leaves 5
+# minutes of real margin — comfortably more than any plausible request
+# latency — while remaining an unremarkable checkout window for a customer.
+PAYMENT_HOLD = timedelta(minutes=20)
 
 # AAD-SEC-027: in-app, phone-number-free proof-of-delivery. 4 digits is
 # plenty of entropy for a code that's shown once on a screen and typed once
