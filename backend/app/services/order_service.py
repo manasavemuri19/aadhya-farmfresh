@@ -1530,7 +1530,27 @@ class OrderService:
         order = await self.orders.get_for_user(order_id, user_id)
         if not order:
             raise NotFound("We could not find that order.")
-        return await self._to_view(order)
+        # AAD-PAY-020: AAD-PERF-009 made `_to_view` stop echoing the gateway's
+        # checkout payload by default, so a completed or abandoned order
+        # doesn't keep re-serving its stale, one-time-use payment link
+        # forever — the right call. But it left no path passing it through
+        # for the one case that still legitimately needs it: the mobile
+        # payment screen's own `GET /orders/{id}` poll, which is how it
+        # recovers the payment link if the app was backgrounded or this
+        # screen simply re-rendered after the order was created. That gap
+        # meant "Open payment page" was permanently disabled for every
+        # single online order — the button never had a URL to open. Only
+        # reveal it while the order is genuinely still awaiting payment;
+        # once it moves on (paid, cancelled, expired), this goes back to
+        # `None` exactly as AAD-PERF-009 intended.
+        checkout_payload = None
+        if (
+            OrderStatus(order["status"]) is OrderStatus.PENDING_PAYMENT
+            and order["payment"]
+            and order["payment"].get("checkout_payload")
+        ):
+            checkout_payload = order["payment"]["checkout_payload"]
+        return await self._to_view(order, checkout_payload=checkout_payload)
 
     # AAD-SEC-033: the position shown to the customer used to be the agent's
     # last reported location *anywhere*, with no freshness bound — a fix
