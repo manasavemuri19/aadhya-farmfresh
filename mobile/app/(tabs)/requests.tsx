@@ -98,16 +98,28 @@ export default function RequestsScreen() {
     return () => subscription.remove();
   }, []);
 
+  // AAD-MOB-024: this is what was behind the "glitching, can't type" the
+  // delivery-code sheet showed on first open. A Modal is its own native
+  // layer, but its TextInput still lives in *this* component's React tree —
+  // every 15s poll re-renders the whole screen underneath it, including
+  // reconciling the full ongoing/requests FlatList, and doing that mid-
+  // keystroke was enough to stutter the keyboard and drop characters on a
+  // loaded Android device. (The 2nd/3rd reopen looking fine wasn't the fix
+  // "kicking in" — it was just landing between polls by luck.) Nothing
+  // behind the sheet needs to be live while the agent is mid-code-entry —
+  // onVerified already invalidates both queries itself the instant it
+  // succeeds — so both simply pause for as long as the sheet is open and
+  // resume the moment it closes, success or cancel either way.
   const ongoing = useQuery({
     queryKey: ['delivery', 'ongoing'],
     queryFn: () => deliveryApi.listOngoing(),
-    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+    refetchInterval: verifyingOrder ? false : REQUESTS_POLL_INTERVAL_MS,
   });
 
   const requests = useQuery({
     queryKey: ['delivery', 'requests'],
     queryFn: () => deliveryApi.listRequests(),
-    refetchInterval: REQUESTS_POLL_INTERVAL_MS,
+    refetchInterval: verifyingOrder ? false : REQUESTS_POLL_INTERVAL_MS,
   });
 
   // AAD-MOB-012: this used to run for the whole time the Requests tab was
