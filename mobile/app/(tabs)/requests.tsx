@@ -94,6 +94,9 @@ export default function RequestsScreen() {
     verifyingOrderRef.current = verifyingOrder !== null;
   }, [verifyingOrder]);
   const reportedOnce = useRef(false);
+  // AAD-MOB-028: see the location effect below — the OS permission prompt
+  // is shown at most once per mount, never re-requested in a loop.
+  const permissionPrompted = useRef(false);
   // AAD-MOB-012: whether the app is actually in the foreground right now —
   // GPS reporting below stops the instant it isn't, rather than continuing
   // for as long as this tab merely stays mounted (which, in a tab
@@ -148,8 +151,35 @@ export default function RequestsScreen() {
     let subscription: Location.LocationSubscription | undefined;
 
     const start = async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      // AAD-MOB-028: the root cause behind every "glitch" on this screen —
+      // the keyboard flickering in and out, the status bar icons flashing
+      // dark/light, the lag on the keypad. This used to call
+      // requestForegroundPermissionsAsync() every time this effect started.
+      // On Android that call launches the system's (transparent) permission
+      // activity even when permission is ALREADY granted — it just closes
+      // itself instantly. But launching it pauses this app for a split
+      // second, which fires AppState 'background' → appActive=false → this
+      // effect tears down → the permission activity closes → AppState
+      // 'active' → appActive=true → this effect starts again → requests
+      // permission again → ... a tight loop, several times a second, for
+      // as long as there's an active delivery. That's exactly why it began
+      // "the minute a request is accepted": that's when hasActiveDeliveries
+      // flips true and this effect first runs. Each lap also stole window
+      // focus (keyboard hides, status bar re-tints) and told React Query
+      // the app had refocused (root _layout's focusManager), refetching
+      // every query on screen — hence the lag.
+      //
+      // Now: check silently first (no activity, no pause, no AppState
+      // change), and only ever show the real prompt once per mount if it's
+      // genuinely still undecided.
+      const current = await Location.getForegroundPermissionsAsync();
       if (cancelled) return;
+      let status = current.status;
+      if (status !== 'granted' && current.canAskAgain && !permissionPrompted.current) {
+        permissionPrompted.current = true;
+        ({ status } = await Location.requestForegroundPermissionsAsync());
+        if (cancelled) return;
+      }
       if (status !== 'granted') {
         setLocationDenied(true);
         return;
