@@ -185,7 +185,14 @@ export default function OrderScreen() {
             Read this out to your delivery partner when they arrive — it&apos;s how we confirm
             the order reached you.
           </Text>
-          <Text style={styles.deliveryCode}>{data.delivery_code}</Text>
+          <Text
+            style={styles.deliveryCode}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
+            {data.delivery_code}
+          </Text>
         </View>
       )}
 
@@ -313,9 +320,16 @@ const styles = StyleSheet.create({
   card: { backgroundColor: color.card, borderRadius: radius.md, padding: space.lg, gap: space.sm },
   cardTitle: { fontSize: size.base },
   deliveryCode: {
+    // AAD-MOB-025: 40px + 10px letterSpacing on a 4-character string is
+    // ~250px of glyph-and-gap width before padding — comfortably wider than
+    // a smaller Android phone's usable card width, so the last digit (or
+    // its trailing letter-spacing) was getting clipped by the card edge.
+    // Sized down to something that fits the narrowest phones this app
+    // actually needs to support with room to spare; adjustsFontSizeToFit
+    // above is just the safety net for whatever's narrower still.
     fontFamily: font.monoBold,
-    fontSize: 40,
-    letterSpacing: 10,
+    fontSize: 32,
+    letterSpacing: 6,
     color: color.ink,
     textAlign: 'center',
     marginTop: space.xs,

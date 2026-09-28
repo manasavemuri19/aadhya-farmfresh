@@ -84,6 +84,15 @@ export default function RequestsScreen() {
   // VerifyDeliveryModal itself owns the code field, submit state and error
   // display; this screen only needs to know whether to render it.
   const [verifyingOrder, setVerifyingOrder] = useState<DeliveryOrderView | null>(null);
+  // Mirrors `verifyingOrder` for the GPS callback below, which is created
+  // once inside an effect that intentionally doesn't restart on every open/
+  // close of the sheet (see that effect's own comment) — a ref is how it
+  // reads the *current* value without becoming a dependency that would tear
+  // down and restart the location watch itself each time.
+  const verifyingOrderRef = useRef(false);
+  useEffect(() => {
+    verifyingOrderRef.current = verifyingOrder !== null;
+  }, [verifyingOrder]);
   const reportedOnce = useRef(false);
   // AAD-MOB-012: whether the app is actually in the foreground right now —
   // GPS reporting below stops the instant it isn't, rather than continuing
@@ -159,7 +168,12 @@ export default function RequestsScreen() {
             deliveryApi
               .reportLocation(position.coords.latitude, position.coords.longitude)
               .then(() => {
-                if (!cancelled) {
+                // Same reasoning as the two polls above: don't trigger a
+                // 'requests' refetch (and the re-render that comes with it)
+                // while the delivery-code sheet is open. The report itself
+                // still goes out on schedule either way — only the
+                // resulting list refresh is deferred.
+                if (!cancelled && !verifyingOrderRef.current) {
                   void queryClient.invalidateQueries({ queryKey: ['delivery', 'requests'] });
                 }
               })

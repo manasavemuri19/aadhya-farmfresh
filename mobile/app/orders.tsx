@@ -5,6 +5,16 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 
 import { Text } from '../src/components/Text';
 import { EmptyState, ErrorState, Loading } from '../src/components/Feedback';
+// AAD-MOB-026: this screen had no per-route boundary of its own, unlike
+// order/[id] and payment — the two screens explicitly called out in
+// ErrorBoundary.tsx as "most likely to throw" for the same reason this one
+// actually did (see the "My orders" crash report): a bad render here was
+// falling through to the root layout's boundary instead of being contained
+// to just this screen. Root cause of the crash itself is still open — this
+// alone doesn't fix that — but it stops one bad order from being able to
+// take the whole app down, and its console.error now gives us the actual
+// stack the next time it happens instead of a dead end.
+export { AppErrorFallback as ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ordersApi } from '../src/api/endpoints';
 import { formatPaise } from '../src/lib/money';
 import { color, font, radius, size, space } from '../src/theme/tokens';
