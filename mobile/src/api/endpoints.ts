@@ -87,7 +87,7 @@ export const paymentsApi = {
   // from the Payment Link's hosted checkout page. Query params come exactly
   // as Razorpay sends them on the redirect — see app/payment-callback.tsx.
   confirmLinkCallback: (params: Record<string, string>) =>
-    api.get<OrderView>(`/payments/link-callback?${new URLSearchParams(params).toString()}`, true),
+    api.get<{ order_id: string; status: string }>(`/payments/link-callback?${new URLSearchParams(params).toString()}`, true),
 };
 
 export const notificationsApi = {

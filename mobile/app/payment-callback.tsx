@@ -49,8 +49,16 @@ export default function PaymentCallbackScreen() {
         razorpay_payment_link_status: params.razorpay_payment_link_status ?? '',
         razorpay_signature: params.razorpay_signature,
       })
-      .then((order) => {
-        if (order.status === 'confirmed') {
+      .then((result) => {
+        // AAD-MOB-031: this route answers `{ order_id, status }` where
+        // `status` is Razorpay's payment-link status ("paid", "cancelled",
+        // "expired"...), NOT an order status. The screen used to compare it
+        // to the order status 'confirmed' — which a successful payment never
+        // equals — so every paid order flashed "Payment not confirmed"
+        // before the order screen took over. "paid" is the success signal;
+        // the order screen itself shows the live order state (the webhook
+        // confirms the order regardless of this redirect).
+        if (result.status === 'paid') {
           router.replace(`/order/${orderId}`);
         } else {
           setStatus('error');
