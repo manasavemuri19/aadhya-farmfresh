@@ -15,7 +15,9 @@ import { ApiError, getApiBaseUrl, isApiBaseUrlUnconfigured } from '../src/api/cl
 import { color } from '../src/theme/tokens';
 import { LoginScreen } from '../src/screens/LoginScreen';
 import { CompleteProfileScreen } from '../src/screens/CompleteProfileScreen';
-import { EnvironmentBanner } from '../src/components/EnvironmentBanner';
+// AAD-MOB-031: on-screen environment banner turned off (owner demos). Component kept in
+// src/components/EnvironmentBanner.tsx; re-enable by restoring this import + the render below.
+// import { EnvironmentBanner } from '../src/components/EnvironmentBanner';
 import { ErrorState } from '../src/components/Feedback';
 import { registerForPushNotifications } from '../src/lib/pushNotifications';
 
@@ -113,7 +115,7 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
-        <EnvironmentBanner />
+        {/* AAD-MOB-031: <EnvironmentBanner /> disabled — no DEVELOPMENT/PREVIEW strip in any build. */}
         {status === 'signed_out' ? (
           <LoginScreen />
         ) : status === 'degraded' ? (
