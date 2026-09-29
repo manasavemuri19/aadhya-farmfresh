@@ -384,7 +384,7 @@ async def test_create_order_sets_expire_by_and_disables_partial_payment(provider
     )
 
     assert captured["expire_by"] == int(expires_at.timestamp())
-    assert captured["partial_payment"] is False
+    assert captured["accept_partial"] is False  # AAD-PAY-018: real field name
 
 
 async def test_create_order_without_expires_at_omits_expire_by(provider, monkeypatch):
@@ -401,7 +401,7 @@ async def test_create_order_without_expires_at_omits_expire_by(provider, monkeyp
     await provider.create_order(amount_paise=10_000, currency="INR", receipt="ord_1", notes={})
 
     assert "expire_by" not in captured
-    assert captured["partial_payment"] is False
+    assert captured["accept_partial"] is False  # AAD-PAY-018: real field name
 
 
 # ---------------------------------------------------------------------------

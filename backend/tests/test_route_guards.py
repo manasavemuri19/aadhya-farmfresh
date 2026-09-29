@@ -46,6 +46,9 @@ EXPECTED_GUARDS: dict[tuple[str, str, str], str] = {
     ("admin", "POST", "/admin/price"): "admin",
     ("admin", "POST", "/admin/products/{sku}/availability"): "staff",
     ("admin", "GET", "/admin/orders"): "staff",
+    ("admin", "GET", "/admin/orders/{order_id}"): "staff",
+    # AAD-PAY-021: money visibility is owner-only, like refunds themselves.
+    ("admin", "GET", "/admin/refunds/pending"): "admin",
     ("admin", "POST", "/admin/orders/{order_id}/status"): "staff",
     ("admin", "POST", "/admin/orders/{order_id}/reassign"): "staff",
     ("admin", "POST", "/admin/maintenance/release-holds"): "staff",
@@ -53,6 +56,8 @@ EXPECTED_GUARDS: dict[tuple[str, str, str], str] = {
     # refund does (see update_order_status's own REFUNDED check above it in
     # admin.py) — not a staff action.
     ("admin", "POST", "/admin/cod/settlements"): "admin",
+    ("admin", "GET", "/admin/cod/pending"): "admin",
+    ("admin", "GET", "/admin/cod/settlements"): "admin",
     ("admin", "GET", "/admin/support/tickets"): "staff",
     ("admin", "POST", "/admin/support/tickets/{ticket_id}/close"): "staff",
     ("auth", "POST", "/auth/google"): "public",
@@ -70,6 +75,7 @@ EXPECTED_GUARDS: dict[tuple[str, str, str], str] = {
     ("catalog", "GET", "/catalog/search"): "public",
     ("delivery", "GET", "/delivery/requests"): "delivery_agent",
     ("delivery", "GET", "/delivery/ongoing"): "delivery_agent",
+    ("delivery", "GET", "/delivery/cash"): "delivery_agent",
     ("delivery", "POST", "/delivery/orders/{order_id}/accept"): "delivery_agent",
     ("delivery", "POST", "/delivery/orders/{order_id}/release"): "delivery_agent",
     ("delivery", "POST", "/delivery/orders/{order_id}/status"): "delivery_agent",

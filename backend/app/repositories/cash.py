@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CashSettlement, CodCollection
+from app.db.models import Order as OrderRow
 
 
 def _collection_to_dict(row: CodCollection) -> dict[str, Any]:
@@ -137,3 +138,73 @@ class CashRepository:
     async def get_settlement(self, settlement_id: str) -> dict[str, Any] | None:
         row = await self.session.get(CashSettlement, settlement_id)
         return _settlement_to_dict(row) if row else None
+
+    # ---------- AAD-BIZ-004: read side for the owner's Cash tab and the ----------
+    # ---------- agent's own "cash to hand over" line.                   ----------
+    #
+    # Deliberately unlocked reads — these only display. The settlement write
+    # path still goes through `pending_for_agent` (FOR UPDATE), so a figure
+    # shown here that goes stale a second later can't cause a wrong
+    # settlement: `settle_agent` re-totals under the lock and records what
+    # it actually finds.
+
+    async def pending_by_agent(self) -> list[dict[str, Any]]:
+        """Every unsettled COD collection, grouped by agent, with the order
+        numbers — oldest collection first within each agent."""
+        stmt = (
+            select(
+                CodCollection.agent_id,
+                CodCollection.order_id,
+                CodCollection.amount_paise,
+                CodCollection.collected_at,
+                OrderRow.order_number,
+            )
+            .join(OrderRow, OrderRow.id == CodCollection.order_id)
+            .where(CodCollection.settlement_id.is_(None))
+            .order_by(CodCollection.agent_id, CodCollection.collected_at)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        grouped: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            g = grouped.setdefault(
+                r.agent_id, {"agent_id": r.agent_id, "pending_amount_paise": 0, "orders": []}
+            )
+            g["pending_amount_paise"] += r.amount_paise
+            g["orders"].append(
+                {
+                    "order_id": r.order_id,
+                    "order_number": r.order_number,
+                    "amount_paise": r.amount_paise,
+                    "collected_at": r.collected_at,
+                }
+            )
+        return list(grouped.values())
+
+    async def pending_total_for_agent(self, agent_id: str) -> tuple[int, int]:
+        """(amount_paise, order_count) this agent currently holds."""
+        stmt = select(
+            func.coalesce(func.sum(CodCollection.amount_paise), 0), func.count(CodCollection.id)
+        ).where(CodCollection.agent_id == agent_id, CodCollection.settlement_id.is_(None))
+        amount, count = (await self.session.execute(stmt)).one()
+        return int(amount), int(count)
+
+    async def list_settlements(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        """Most recent first, with how many orders each one covered."""
+        count_sub = (
+            select(CodCollection.settlement_id, func.count(CodCollection.id).label("n"))
+            .group_by(CodCollection.settlement_id)
+            .subquery()
+        )
+        stmt = (
+            select(CashSettlement, func.coalesce(count_sub.c.n, 0))
+            .outerjoin(count_sub, count_sub.c.settlement_id == CashSettlement.id)
+            .order_by(CashSettlement.created_at.desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        out = []
+        for settlement, n in rows:
+            d = _settlement_to_dict(settlement)
+            d["orders_settled"] = int(n)
+            out.append(d)
+        return out

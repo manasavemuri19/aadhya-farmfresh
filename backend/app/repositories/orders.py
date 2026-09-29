@@ -626,6 +626,79 @@ class OrderRepository:
         rows = (await self.session.execute(stmt)).scalars().unique().all()
         return [_to_dict(r) for r in rows]
 
+    # ---------- AAD-PAY-021: stuck-refund visibility ----------
+    #
+    # "Pending since" is the payment row's `updated_at`: the last write to a
+    # `refund_pending` payment is the one that put it there — a failed
+    # gateway attempt in `process_pending_refunds` writes nothing (it just
+    # `continue`s), so retries don't reset the clock. The only later write
+    # is `mark_refunds_alerted` below, which happens after the alert
+    # threshold has already been crossed.
+
+    async def list_refunds_pending(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Every order whose refund is queued but hasn't gone through yet,
+        oldest first — the owner's "refunds needing attention" list."""
+        stmt = (
+            select(
+                OrderRow.id,
+                OrderRow.order_number,
+                Payment.amount_paise,
+                Payment.updated_at,
+                Payment.refund_alerted_at,
+            )
+            .join(Payment, Payment.order_id == OrderRow.id)
+            .where(Payment.status == PaymentStatus.REFUND_PENDING.value)
+            .order_by(Payment.updated_at)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [
+            {
+                "order_id": r.id,
+                "order_number": r.order_number,
+                "amount_paise": r.amount_paise,
+                "pending_since": r.updated_at,
+                "alerted": r.refund_alerted_at is not None,
+            }
+            for r in rows
+        ]
+
+    async def find_stuck_refunds_to_alert(self, *, older_than: datetime) -> list[dict[str, Any]]:
+        """`refund_pending` since before `older_than` and not yet alerted.
+        Row-locked with SKIP LOCKED so two sweep passes can never both
+        claim (and double-push) the same payment — on top of the sweep's
+        own advisory lock."""
+        stmt = (
+            select(OrderRow.id, OrderRow.order_number, Payment.amount_paise, Payment.updated_at)
+            .join(Payment, Payment.order_id == OrderRow.id)
+            .where(
+                Payment.status == PaymentStatus.REFUND_PENDING.value,
+                Payment.refund_alerted_at.is_(None),
+                Payment.updated_at < older_than,
+            )
+            .order_by(Payment.updated_at)
+            .with_for_update(of=Payment, skip_locked=True)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [
+            {
+                "order_id": r.id,
+                "order_number": r.order_number,
+                "amount_paise": r.amount_paise,
+                "pending_since": r.updated_at,
+            }
+            for r in rows
+        ]
+
+    async def mark_refunds_alerted(self, order_ids: list[str]) -> None:
+        if not order_ids:
+            return
+        await self.session.execute(
+            update(Payment)
+            .where(Payment.order_id.in_(order_ids))
+            .values(refund_alerted_at=datetime.now(UTC))
+        )
+
     # ---------- webhook replay protection ----------
 
     async def record_webhook_once(

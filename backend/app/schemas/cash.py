@@ -32,3 +32,30 @@ class SettlementView(Schema):
     reason: str
     orders_settled: int
     created_at: datetime
+    # Cash tab history label — filled in by the list endpoint, not by
+    # settle_agent's own response (the caller already knows who it paid).
+    agent_name: str | None = None
+
+
+class AgentCashOrder(Schema):
+    order_id: str
+    order_number: str
+    amount_paise: int
+    collected_at: datetime
+
+
+class AgentPendingCash(Schema):
+    """One delivery agent's unsettled COD cash — a card on the Cash tab."""
+
+    agent_id: str
+    agent_name: str | None
+    agent_phone: str | None
+    pending_amount_paise: int
+    orders: list[AgentCashOrder]
+
+
+class MyCashView(Schema):
+    """The delivery agent's own "cash to hand over" line."""
+
+    pending_amount_paise: int
+    orders_count: int

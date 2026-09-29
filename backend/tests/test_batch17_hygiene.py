@@ -200,7 +200,7 @@ async def test_register_bumps_updated_at_on_a_repeat_registration(session, user)
 # ---------- AAD-PERF-009: checkout_payload not echoed forever ----------
 
 
-async def test_checkout_payload_present_at_creation_absent_on_later_read(
+async def test_checkout_payload_present_while_pending_absent_once_it_moves_on(
     order_service, user, milk
 ):
     order = await order_service.create_order(
@@ -210,8 +210,18 @@ async def test_checkout_payload_present_at_creation_absent_on_later_read(
     )
     assert order.payment.checkout_payload is not None
 
+    # AAD-PAY-020: while the order is still awaiting payment, a re-read MUST
+    # carry the payment link — the mobile payment screen recovers it from
+    # exactly this read. AAD-PERF-009's "don't echo it forever" still holds
+    # once the order moves on (checked below).
     reread = await order_service.get_for_user(order.id, user["id"])
-    assert reread.payment.checkout_payload is None
+    assert reread.payment.checkout_payload is not None
+
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED, note="expired", actor="system"
+    )
+    after = await order_service.get_for_user(order.id, user["id"])
+    assert after.payment.checkout_payload is None
 
 
 # ---------- AAD-QUAL-024: typed mock-complete body ----------

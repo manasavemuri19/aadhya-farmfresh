@@ -82,6 +82,7 @@ from app.schemas.order import (
     OrderView,
     Quote,
     QuoteLine,
+    RefundPendingView,
 )
 from app.services.pricing import PricedLine, build_cart, price_line
 from app.services.push_service import PushService
@@ -102,6 +103,12 @@ log = logging.getLogger(__name__)
 # minutes of real margin — comfortably more than any plausible request
 # latency — while remaining an unremarkable checkout window for a customer.
 PAYMENT_HOLD = timedelta(minutes=20)
+
+# AAD-PAY-021: how long a refund can sit in `refund_pending` before the owner
+# is pushed about it. The sweep retries every 2 minutes, so 30 minutes is ~15
+# failed attempts — long past a transient Razorpay blip (those clear in one
+# or two passes), short enough that the customer hasn't noticed yet.
+STUCK_REFUND_ALERT_AFTER = timedelta(minutes=30)
 
 # AAD-SEC-027: in-app, phone-number-free proof-of-delivery. 4 digits is
 # plenty of entropy for a code that's shown once on a screen and typed once
@@ -853,7 +860,7 @@ class OrderService:
 
         current = OrderStatus(order["status"])
         if current not in CUSTOMER_CANCELLABLE:
-            # AAD-BIZ-003: paid/placed orders are no longer customer-
+            # AAD-BIZ-006: paid/placed orders are no longer customer-
             # cancellable at all (see CUSTOMER_CANCELLABLE), so the old
             # "already left the farm" wording no longer describes why.
             # raise Forbidden(
@@ -1533,6 +1540,40 @@ class OrderService:
 
     # ---------- reads ----------
 
+    async def get_for_staff(self, order_id: str) -> OrderView:
+        """Any order, for the owner/staff order screen — no ownership check
+        (the route's StaffUser guard is the authorization), and never the
+        gateway checkout payload: staff have no reason to open a customer's
+        payment link."""
+        order = await self.orders.get(order_id)
+        if not order:
+            raise NotFound("We could not find that order.")
+        return self._staff_safe(await self._to_view(order))
+
+    @staticmethod
+    def _staff_safe(view: OrderView) -> OrderView:
+        """The customer's proof-of-delivery code is for the customer's
+        screen only (AAD-SEC-027) — a staff or owner view has no use for it,
+        and showing it there would let anyone at the counter hand it to an
+        agent who hasn't actually reached the door."""
+        return view.model_copy(update={"delivery_code": None})
+
+    async def list_refunds_pending(self) -> list[RefundPendingView]:
+        """AAD-PAY-021: every refund still waiting on the gateway, oldest
+        first, flagged `stuck` past STUCK_REFUND_ALERT_AFTER."""
+        now = datetime.now(UTC)
+        rows = await self.orders.list_refunds_pending()
+        return [
+            RefundPendingView(
+                order_id=r["order_id"],
+                order_number=r["order_number"],
+                amount_paise=r["amount_paise"],
+                pending_since=r["pending_since"],
+                stuck=r["alerted"] or (now - r["pending_since"]) >= STUCK_REFUND_ALERT_AFTER,
+            )
+            for r in rows
+        ]
+
     async def get_for_user(self, order_id: str, user_id: str) -> OrderView:
         order = await self.orders.get_for_user(order_id, user_id)
         if not order:
@@ -1649,7 +1690,7 @@ class OrderService:
         has_more = len(rows) > limit
         rows = rows[:limit]
         next_cursor = rows[-1]["created_at"].isoformat() if has_more and rows else None
-        items = [await self._to_view(o) for o in rows]
+        items = [self._staff_safe(await self._to_view(o)) for o in rows]
         return Page(items=items, next_cursor=next_cursor, has_more=has_more)
 
     # ---------- helpers ----------

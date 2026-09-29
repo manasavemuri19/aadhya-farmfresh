@@ -22,9 +22,10 @@ const EXTRA_BOTTOM_SPACE = 36;
 export const TRACKER_BAR_SPACE = space.sm + TRACKER_BAR_HEIGHT;
 
 /**
- * Three different tab sets share this one file, gated by role: customer
- * gets Order + Profile; staff/admin get Order + Update Stock + Profile;
- * a delivery agent gets Requests + Profile only. Every screen is
+ * Four different tab sets share this one file, gated by role: customer
+ * gets Order + Profile; staff get Order + Orders + Update Stock + Profile;
+ * the owner (admin) additionally gets Cash; a delivery agent gets
+ * Requests + Profile only. Every screen is
  * registered unconditionally (expo-router needs the route to exist) but
  * hidden from the bar via `href: null` for roles that shouldn't see it —
  * one tree, one set of screens, role only ever changes what's visible.
@@ -36,6 +37,9 @@ export const TRACKER_BAR_SPACE = space.sm + TRACKER_BAR_HEIGHT;
 export default function TabsLayout() {
   const role = useSession((s) => s.user?.role);
   const canManageStock = role === 'staff' || role === 'admin';
+  // AAD-BIZ-006 / AAD-BIZ-004: Orders (live queue + owner cancel/refund) for
+  // staff and owner; Cash (COD settlement) for the owner only.
+  const isOwner = role === 'admin';
   const isDeliveryAgent = role === 'delivery_agent';
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -87,6 +91,26 @@ export default function TabsLayout() {
             href: isDeliveryAgent ? null : undefined,
             tabBarIcon: ({ color: tint, focused }) => (
               <Ionicons name={focused ? 'bag' : 'bag-outline'} size={22} color={tint} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="manage"
+          options={{
+            title: 'Orders',
+            href: canManageStock ? undefined : null,
+            tabBarIcon: ({ color: tint, focused }) => (
+              <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={22} color={tint} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="cash"
+          options={{
+            title: 'Cash',
+            href: isOwner ? undefined : null,
+            tabBarIcon: ({ color: tint, focused }) => (
+              <Ionicons name={focused ? 'cash' : 'cash-outline'} size={22} color={tint} />
             ),
           }}
         />

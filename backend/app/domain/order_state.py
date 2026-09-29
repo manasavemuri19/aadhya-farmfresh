@@ -73,7 +73,7 @@ def releases_stock(from_status: OrderStatus, to_status: OrderStatus) -> bool:
 
 # Statuses the customer is still allowed to cancel from without calling the farm.
 #
-# AAD-BIZ-003 (product decision, 2026-09-28): quick-commerce model, same as
+# AAD-BIZ-006 (product decision, 2026-09-28): quick-commerce model, same as
 # Zepto/Blinkit — once an order is placed and paid (online captured, or a COD
 # order, which is confirmed the moment it's placed), the customer can no
 # longer cancel it from the app. Only an unpaid PENDING_PAYMENT order stays

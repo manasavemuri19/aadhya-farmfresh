@@ -447,6 +447,11 @@ class Payment(Base, TimestampMixin):
     # `amount_paise` above, which is what we expected and is what a normal
     # refund would use).
     received_amount_paise: Mapped[int | None] = mapped_column(BigInteger)
+    # AAD-PAY-021: when the owner was pushed about this payment's refund
+    # being stuck in `refund_pending` (see app/main.py's sweep). NULL means
+    # "not alerted yet"; set once, never cleared — a refund that later
+    # succeeds leaves `refund_pending` and drops out of the alert query.
+    refund_alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     order: Mapped[Order] = relationship(back_populates="payment")
 

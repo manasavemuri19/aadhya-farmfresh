@@ -54,7 +54,12 @@ async def _queue_a_refund(order_service, orders, user, sku: str) -> str:
             raw={},
         )
     )
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable;
+    # this now goes through the staff cancel path (same `_cancel`).
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED,
+        note="changed my mind", actor="staff",
+    )
     doc = await orders.get(order.id)
     assert doc["payment"]["status"] == PaymentStatus.REFUND_PENDING.value
     return order.id

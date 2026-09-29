@@ -17,7 +17,7 @@ from app.core.ids import new_id
 from app.domain.enums import Role, SettlementStatus
 from app.repositories.cash import CashRepository
 from app.repositories.users import UserRepository
-from app.schemas.cash import SettlementView
+from app.schemas.cash import AgentCashOrder, AgentPendingCash, MyCashView, SettlementView
 
 log = logging.getLogger(__name__)
 
@@ -108,3 +108,45 @@ class CashService:
             orders_settled=len(pending),
             created_at=settlement["created_at"],
         )
+
+    # ---------- read side: owner's Cash tab, agent's own line ----------
+
+    async def pending_by_agent(self) -> list[AgentPendingCash]:
+        """One card per agent holding unsettled COD cash, largest first."""
+        groups = await self.cash.pending_by_agent()
+        names = await self.users.names_by_id([g["agent_id"] for g in groups])
+        cards = [
+            AgentPendingCash(
+                agent_id=g["agent_id"],
+                agent_name=(names.get(g["agent_id"]) or {}).get("name") or None,
+                agent_phone=(names.get(g["agent_id"]) or {}).get("phone"),
+                pending_amount_paise=g["pending_amount_paise"],
+                orders=[AgentCashOrder(**o) for o in g["orders"]],
+            )
+            for g in groups
+        ]
+        cards.sort(key=lambda c: c.pending_amount_paise, reverse=True)
+        return cards
+
+    async def my_cash(self, agent_id: str) -> MyCashView:
+        amount, count = await self.cash.pending_total_for_agent(agent_id)
+        return MyCashView(pending_amount_paise=amount, orders_count=count)
+
+    async def recent_settlements(self, *, limit: int = 30) -> list[SettlementView]:
+        rows = await self.cash.list_settlements(limit=limit)
+        names = await self.users.names_by_id(list({r["agent_id"] for r in rows}))
+        return [
+            SettlementView(
+                id=r["id"],
+                agent_id=r["agent_id"],
+                expected_amount_paise=r["expected_amount_paise"],
+                actual_amount_paise=r["actual_amount_paise"],
+                discrepancy_paise=r["discrepancy_paise"],
+                status=r["status"],
+                reason=r["reason"],
+                orders_settled=r["orders_settled"],
+                created_at=r["created_at"],
+                agent_name=(names.get(r["agent_id"]) or {}).get("name") or None,
+            )
+            for r in rows
+        ]

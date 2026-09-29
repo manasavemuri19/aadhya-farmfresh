@@ -10,6 +10,7 @@ import { Button } from '../../src/components/Button';
 import { EmptyState, ErrorState, Loading } from '../../src/components/Feedback';
 import { VerifyDeliveryModal } from '../../src/components/VerifyDeliveryModal';
 import { deliveryApi } from '../../src/api/endpoints';
+import { agentCashApi } from '../../src/api/owner';
 import { ApiError } from '../../src/api/client';
 import { formatPaise } from '../../src/lib/money';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
@@ -132,6 +133,16 @@ export default function RequestsScreen() {
     queryKey: ['delivery', 'requests'],
     queryFn: () => deliveryApi.listRequests(),
     refetchInterval: verifyingOrder ? false : REQUESTS_POLL_INTERVAL_MS,
+  });
+
+  // AAD-BIZ-004: COD cash this agent is holding — the same total the
+  // owner's Cash tab settles against. Refreshed right after each verified
+  // delivery (onVerified below) and once a minute otherwise, so it drops
+  // to zero soon after the owner marks it received.
+  const myCash = useQuery({
+    queryKey: ['delivery', 'cash'],
+    queryFn: () => agentCashApi.mine(),
+    refetchInterval: verifyingOrder ? false : 60_000,
   });
 
   // AAD-MOB-012: this used to run for the whole time the Requests tab was
@@ -320,6 +331,18 @@ export default function RequestsScreen() {
         <View>
           <Text variant="display" style={styles.heading}>Requests</Text>
 
+          {(myCash.data?.pending_amount_paise ?? 0) > 0 && (
+            <View style={styles.cashLine}>
+              <Text style={styles.cashLabel}>Cash to hand over</Text>
+              <Text style={styles.cashAmount}>
+                {formatPaise(myCash.data!.pending_amount_paise)}
+                <Text variant="caption">
+                  {'  '}· {myCash.data!.orders_count} order{myCash.data!.orders_count === 1 ? '' : 's'}
+                </Text>
+              </Text>
+            </View>
+          )}
+
           {locationDenied && (
             <View style={styles.locationNotice}>
               <Text variant="caption" style={styles.locationNoticeText}>
@@ -428,6 +451,7 @@ export default function RequestsScreen() {
       onVerified={() => {
         setVerifyingOrder(null);
         void queryClient.invalidateQueries({ queryKey: ['delivery', 'ongoing'] });
+        void queryClient.invalidateQueries({ queryKey: ['delivery', 'cash'] });
       }}
       onClose={() => setVerifyingOrder(null)}
     />
@@ -481,6 +505,17 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingHorizontal: space.lg, paddingBottom: space.xxl },
   heading: { marginBottom: space.md },
+  cashLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: color.leafSoft,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginBottom: space.md,
+  },
+  cashLabel: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.leaf },
+  cashAmount: { fontFamily: font.monoBold, fontSize: size.md, color: color.ink },
   sectionLabel: { marginTop: space.md, marginBottom: space.sm, fontSize: size.base },
   locationNotice: {
     backgroundColor: color.primarySoft,

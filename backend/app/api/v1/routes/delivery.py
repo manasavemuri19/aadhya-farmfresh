@@ -6,8 +6,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import DeliveryAgentUser, get_delivery_service
+from app.api.deps import DeliveryAgentUser, get_cash_service, get_delivery_service
 from app.api.route import TransactionalRoute
+from app.schemas.cash import MyCashView
 from app.schemas.delivery import (
     AgentLocationUpdate,
     DeliveryOrderView,
@@ -15,11 +16,13 @@ from app.schemas.delivery import (
     UpdateDeliveryStatusRequest,
     VerifyDeliveryCodeRequest,
 )
+from app.services.cash_service import CashService
 from app.services.delivery_service import DeliveryService
 
 router = APIRouter(prefix="/delivery", tags=["delivery"], route_class=TransactionalRoute)
 
 Delivery = Annotated[DeliveryService, Depends(get_delivery_service)]
+Cash = Annotated[CashService, Depends(get_cash_service)]
 
 
 @router.get("/requests", response_model=list[DeliveryRequestView])
@@ -27,6 +30,15 @@ async def new_requests(agent: DeliveryAgentUser, svc: Delivery) -> list[Delivery
     """AAD-SEC-030: the lean pre-accept view — see DeliveryService.list_requests
     and DeliveryRequestView's own docstring for why this isn't DeliveryOrderView."""
     return await svc.list_requests(agent.user_id)
+
+
+@router.get("/cash", response_model=MyCashView)
+async def my_cash(agent: DeliveryAgentUser, svc: Cash) -> MyCashView:
+    """AAD-BIZ-004: COD cash this agent is holding and hasn't handed over
+    yet — the "Cash to hand over" line on their Requests screen. Same
+    source the owner's Cash tab settles against, so both sides always
+    see the same number."""
+    return await svc.my_cash(agent.user_id)
 
 
 @router.get("/ongoing", response_model=list[DeliveryOrderView])

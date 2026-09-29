@@ -75,6 +75,13 @@ async def test_cancelling_a_cod_order_still_reloads_it_only_once(
 
     monkeypatch.setattr(orders, "get", counting_get)
 
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: a placed COD order is no longer customer-cancellable, so
+    # this goes through the staff path like the captured-payment test above:
+    # one `get` at the top of `update_status`, exactly one inside `_cancel`.
+    # await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # assert calls == [order.id]
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED, note="staff cancel", actor="staff_1",
+    )
 
-    assert calls == [order.id]
+    assert calls == [order.id, order.id]

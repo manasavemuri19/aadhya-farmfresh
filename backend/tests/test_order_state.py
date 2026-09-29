@@ -99,7 +99,12 @@ def test_does_not_release_stock_after_dispatch_or_for_non_cancel_targets(from_st
 def test_customer_cannot_cancel_once_out_for_delivery():
     assert OrderStatus.OUT_FOR_DELIVERY not in CUSTOMER_CANCELLABLE
     assert OrderStatus.DELIVERED not in CUSTOMER_CANCELLABLE
-    assert OrderStatus.CONFIRMED in CUSTOMER_CANCELLABLE
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable —
+    # only an unpaid PENDING_PAYMENT order is.
+    # assert OrderStatus.CONFIRMED in CUSTOMER_CANCELLABLE
+    assert OrderStatus.CONFIRMED not in CUSTOMER_CANCELLABLE
+    assert OrderStatus.PACKED not in CUSTOMER_CANCELLABLE
+    assert frozenset({OrderStatus.PENDING_PAYMENT}) == CUSTOMER_CANCELLABLE
 
 
 def test_delivered_is_terminal_for_fulfilment():

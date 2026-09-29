@@ -181,7 +181,12 @@ async def test_a_cancelled_order_also_frees_up_a_concurrency_slot(
         user_id=user["id"], request=_cod_request([("MILK-COW-1L", 1)]),
         idempotency_key=None,
     )
-    await order_service.cancel(order_id=first.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable;
+    # this now goes through the staff cancel path (same `_cancel`).
+    await order_service.update_status(
+        order_id=first.id, new_status=OrderStatus.CANCELLED,
+        note="changed my mind", actor="staff",
+    )
 
     second = await order_service.create_order(
         user_id=user["id"], request=_cod_request([("MILK-COW-1L", 1)]),

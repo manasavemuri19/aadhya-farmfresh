@@ -20,6 +20,7 @@ import asyncio  # noqa: E402
 import logging  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
 from contextlib import asynccontextmanager, suppress  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
 
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.exceptions import RequestValidationError  # noqa: E402
@@ -46,7 +47,7 @@ from app.repositories.push_tokens import PushTokenRepository  # noqa: E402
 from app.repositories.refresh_tokens import RefreshTokenRepository  # noqa: E402
 from app.repositories.support import SupportRepository  # noqa: E402
 from app.repositories.users import UserRepository  # noqa: E402
-from app.services.order_service import OrderService  # noqa: E402
+from app.services.order_service import STUCK_REFUND_ALERT_AFTER, OrderService  # noqa: E402
 from app.services.push_service import PushService  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -119,6 +120,7 @@ async def _run_sweep_once() -> None:
         push_tokens_pruned = await PushTokenRepository(session).prune_stale()
         low_stock_notified = await _notify_low_stock(session)
         low_stock_rearmed = await service.products.clear_stale_low_stock_flags()
+        stuck_refunds_alerted = await _alert_stuck_refunds(session)
 
     # AAD-REL-003: there's no metrics system anywhere in this codebase to
     # emit an actual gauge to (confirmed — no prometheus_client or
@@ -139,8 +141,75 @@ async def _run_sweep_once() -> None:
             "push_tokens_pruned": push_tokens_pruned,
             "low_stock_notified": low_stock_notified,
             "low_stock_rearmed": low_stock_rearmed,
+            "stuck_refunds_alerted": stuck_refunds_alerted,
         },
     )
+
+
+async def _alert_stuck_refunds(session: db.AsyncSession) -> int:
+    """AAD-PAY-021: `process_pending_refunds` (above, same pass) retries a
+    failed gateway refund forever but only ever logged the failure — so a
+    refund Razorpay kept rejecting would sit there silently while the
+    customer waited for money that wasn't coming. Once a refund has been
+    `refund_pending` for STUCK_REFUND_ALERT_AFTER, push every owner account
+    once (`refund_alerted_at` debounces it, same idea as low_stock_notified)
+    — owners only, not all staff: they're the ones who can act on it in the
+    Razorpay dashboard. It also shows on the owner's Orders tab until it
+    clears (see OrderService.list_refunds_pending).
+
+    Marked alerted even with no owner account to push to, same as the
+    low-stock sweep: otherwise a missing admin role would re-query the same
+    rows every pass forever. Push itself is deferred until commit.
+    """
+    orders = OrderRepository(session)
+    stuck = await orders.find_stuck_refunds_to_alert(
+        older_than=datetime.now(UTC) - STUCK_REFUND_ALERT_AFTER
+    )
+    if not stuck:
+        return 0
+
+    admin_ids = await UserRepository(session).list_admin_ids()
+    if admin_ids:
+        push = PushService(PushTokenRepository(session))
+        for row in stuck:
+            await defer_until_commit(
+                _stuck_refund_push_effect(
+                    push, admin_ids,
+                    order_id=row["order_id"],
+                    order_number=row["order_number"],
+                    amount_paise=row["amount_paise"],
+                )
+            )
+    else:
+        log.warning(
+            "stuck refunds found but no owner account to alert", extra={"count": len(stuck)}
+        )
+
+    await orders.mark_refunds_alerted([row["order_id"] for row in stuck])
+    log.error(
+        "refunds stuck at the gateway",
+        extra={"orders": [row["order_number"] for row in stuck]},
+    )
+    return len(stuck)
+
+
+def _stuck_refund_push_effect(
+    push: PushService, admin_ids: list[str], *, order_id: str, order_number: str, amount_paise: int
+) -> Callable[[], Awaitable[None]]:
+    """Factory for the same late-binding reason as `_low_stock_push_effect`."""
+
+    async def _send() -> None:
+        await push.notify_users(
+            admin_ids,
+            title="Refund stuck",
+            body=(
+                f"The ₹{amount_paise / 100:.0f} refund for order {order_number} still hasn't "
+                "gone through. Check it in the Razorpay dashboard."
+            ),
+            data={"order_id": order_id, "kind": "refund_stuck"},
+        )
+
+    return _send
 
 
 async def _notify_low_stock(session: db.AsyncSession) -> int:

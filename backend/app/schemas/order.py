@@ -227,3 +227,16 @@ class SetPriceRequest(Schema):
         if self.mrp_paise is not None and self.mrp_paise < self.price_paise:
             raise ValueError("mrp_paise must be at least price_paise")
         return self
+
+
+class RefundPendingView(Schema):
+    """AAD-PAY-021: one refund queued at the gateway but not through yet —
+    the owner's "refunds needing attention" list. `stuck` is true once it's
+    been pending longer than the alert threshold (and the owner has been
+    pushed about it)."""
+
+    order_id: str
+    order_number: str
+    amount_paise: int
+    pending_since: datetime
+    stuck: bool

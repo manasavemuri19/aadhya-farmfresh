@@ -28,13 +28,14 @@ from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.domain.enums import OrderStatus, SupportTicketStatus
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.products import ProductRepository
-from app.schemas.cash import RecordSettlementRequest, SettlementView
+from app.schemas.cash import AgentPendingCash, RecordSettlementRequest, SettlementView
 from app.schemas.catalog import Product
 from app.schemas.common import Page
 from app.schemas.delivery import ReassignDeliveryRequest
 from app.schemas.order import (
     AdjustStockRequest,
     OrderView,
+    RefundPendingView,
     SetAvailabilityRequest,
     SetPriceRequest,
     UpdateOrderStatusRequest,
@@ -236,6 +237,19 @@ async def order_queue(
     return await svc.list_queue_for_staff(wanted, limit=limit, after=after)
 
 
+@router.get("/orders/{order_id}", response_model=OrderView)
+async def get_order(order_id: str, staff: StaffUser, svc: Orders) -> OrderView:
+    """One order in full, for the owner/staff order screen."""
+    return await svc.get_for_staff(order_id)
+
+
+@router.get("/refunds/pending", response_model=list[RefundPendingView])
+async def refunds_pending(admin: AdminUser, svc: Orders) -> list[RefundPendingView]:
+    """AAD-PAY-021: refunds queued at the gateway but not through yet —
+    the "Refunds needing attention" block on the owner's Orders tab."""
+    return await svc.list_refunds_pending()
+
+
 @router.post("/orders/{order_id}/status", response_model=OrderView)
 async def update_order_status(
     order_id: str, body: UpdateOrderStatusRequest, staff: StaffUser, svc: Orders
@@ -250,6 +264,13 @@ async def update_order_status(
     """
     if body.status is OrderStatus.REFUNDED and not staff.is_admin:
         raise Forbidden("Refunding an order needs an owner account.")
+    # AAD-BIZ-006 (product decision): cancelling is owner-only too. Customers
+    # can no longer cancel a placed order themselves, so this is now the
+    # one way an order gets cancelled by a person — and cancelling a paid
+    # online order *is* a refund (`_cancel` → `_maybe_refund`), so it sits
+    # behind the same owner bar REFUNDED already did.
+    if body.status is OrderStatus.CANCELLED and not staff.is_admin:
+        raise Forbidden("Cancelling an order needs an owner account.")
     return await svc.update_status(
         order_id=order_id, new_status=body.status, note=body.note, actor=staff.user_id
     )
@@ -265,6 +286,21 @@ async def reassign_delivery(
     isn't scoped to CONFIRMED and doesn't check the agent's own concurrent-
     order cap (see DeliveryService.reassign for why)."""
     await svc.reassign(order_id, new_agent_id=body.agent_id, actor_id=staff.user_id, note=body.note)
+
+
+@router.get("/cod/pending", response_model=list[AgentPendingCash])
+async def cod_pending(admin: AdminUser, svc: Cash) -> list[AgentPendingCash]:
+    """AAD-BIZ-004: every agent currently holding COD cash, with the orders
+    behind each total — the owner's Cash tab."""
+    return await svc.pending_by_agent()
+
+
+@router.get("/cod/settlements", response_model=list[SettlementView])
+async def cod_settlements(
+    admin: AdminUser, svc: Cash, limit: Annotated[int, Query(ge=1, le=100)] = 30
+) -> list[SettlementView]:
+    """Recent settlements, newest first — the Cash tab's history."""
+    return await svc.recent_settlements(limit=limit)
 
 
 @router.post("/cod/settlements", response_model=SettlementView)

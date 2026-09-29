@@ -397,3 +397,59 @@ async def test_settlement_only_claims_that_agents_own_collections(
     # other_agent's own collection is untouched and still pending.
     other_rows = await _collections_for_order(session, order_b.id)
     assert other_rows[0].settlement_id is None
+
+
+# ---------- AAD-BIZ-004: read side (owner Cash tab, agent's own line) ----------
+
+
+async def test_cash_tab_and_agent_line_show_the_same_pending_total(
+    order_service, delivery_service, cash_service, agent, other_agent, user, milk, session
+):
+    placed = []
+    for i in range(2):
+        o = await order_service.create_order(
+            user_id=user["id"],
+            request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+            idempotency_key=f"cash-tab-{i}",
+        )
+        await _deliver_cod_order(order_service, delivery_service, session, agent["id"], o.id)
+        placed.append(o)
+    expected = sum(o.total_paise for o in placed)
+
+    mine = await cash_service.my_cash(agent["id"])
+    assert (mine.pending_amount_paise, mine.orders_count) == (expected, 2)
+    # An agent holding nothing sees zero, not an error.
+    theirs = await cash_service.my_cash(other_agent["id"])
+    assert (theirs.pending_amount_paise, theirs.orders_count) == (0, 0)
+
+    cards = await cash_service.pending_by_agent()
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.agent_id == agent["id"]
+    assert card.agent_name == "COD Agent"
+    assert card.pending_amount_paise == expected
+    assert {o.order_number for o in card.orders} == {o.order_number for o in placed}
+
+
+async def test_after_settling_the_agent_line_is_zero_and_history_shows_it(
+    order_service, delivery_service, cash_service, agent, admin, user, milk, session
+):
+    o = await order_service.create_order(
+        user_id=user["id"],
+        request=order_request([("MILK-COW-1L", 1)], payment_method=PaymentMethod.COD),
+        idempotency_key="cash-hist-1",
+    )
+    await _deliver_cod_order(order_service, delivery_service, session, agent["id"], o.id)
+    await cash_service.settle_agent(
+        agent_id=agent["id"], actual_amount_paise=o.total_paise, reason="", actor_id=admin["id"]
+    )
+
+    mine = await cash_service.my_cash(agent["id"])
+    assert mine.pending_amount_paise == 0
+    assert await cash_service.pending_by_agent() == []
+
+    history = await cash_service.recent_settlements()
+    assert len(history) == 1
+    assert history[0].agent_name == "COD Agent"
+    assert history[0].orders_settled == 1
+    assert history[0].actual_amount_paise == o.total_paise

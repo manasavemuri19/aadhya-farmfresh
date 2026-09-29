@@ -490,3 +490,23 @@ class UserRepository:
             UserRow.role.in_([Role.STAFF.value, Role.ADMIN.value])
         )
         return list((await self.session.execute(stmt)).scalars().all())
+
+    async def list_admin_ids(self) -> list[str]:
+        """AAD-PAY-021: owner accounts only — money alerts (a refund stuck
+        at the gateway) go to whoever can actually act on them, not every
+        staff login. Active accounts only."""
+        stmt = select(UserRow.id).where(
+            UserRow.role == Role.ADMIN.value,
+            UserRow.status == UserStatus.ACTIVE.value,
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def names_by_id(self, user_ids: list[str]) -> dict[str, dict[str, str | None]]:
+        """AAD-BIZ-004 (Cash tab): display name + phone for a handful of
+        users in one query, for labelling delivery agents on the owner's
+        cash screen."""
+        if not user_ids:
+            return {}
+        stmt = select(UserRow.id, UserRow.name, UserRow.phone).where(UserRow.id.in_(user_ids))
+        rows = (await self.session.execute(stmt)).all()
+        return {r.id: {"name": r.name, "phone": r.phone} for r in rows}

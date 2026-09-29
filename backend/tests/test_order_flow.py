@@ -234,7 +234,7 @@ async def test_cancelling_returns_stock_exactly_once(order_service, user, produc
         request=order_request([("MILK-COW-1L", 3)], payment_method=PaymentMethod.COD),
         idempotency_key=None,
     )
-    # AAD-BIZ-003: a placed (COD = confirmed) order is no longer
+    # AAD-BIZ-006: a placed (COD = confirmed) order is no longer
     # customer-cancellable, so this now exercises the staff cancel path —
     # the stock-release-exactly-once guarantee under test is the same
     # `_cancel` either way.
@@ -254,7 +254,7 @@ async def test_cancelling_returns_stock_exactly_once(order_service, user, produc
 
 
 async def test_customer_cannot_cancel_a_placed_order(order_service, user, products, milk):
-    """AAD-BIZ-003: once placed (COD confirms immediately), no customer cancel."""
+    """AAD-BIZ-006: once placed (COD confirms immediately), no customer cancel."""
     from app.core.errors import Forbidden
 
     order = await order_service.create_order(

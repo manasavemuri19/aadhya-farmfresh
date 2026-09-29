@@ -70,7 +70,12 @@ async def test_cancelling_a_made_to_order_order_records_no_phantom_credit(
         idempotency_key=None,
     )
 
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable;
+    # this now goes through the staff cancel path (same `_cancel`).
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED,
+        note="changed my mind", actor="staff",
+    )
 
     rows = await _ledger_rows(products, "KHOYA-250G", order.id)
     assert len(rows) == 2
@@ -97,7 +102,12 @@ async def test_a_tracked_item_still_records_real_stock_movements(
     assert rows[0].delta == -3
     assert rows[0].reason == "order_reserved"
 
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable;
+    # this now goes through the staff cancel path (same `_cancel`).
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED,
+        note="changed my mind", actor="staff",
+    )
     rows = await _ledger_rows(products, "MILK-COW-1L", order.id)
     assert len(rows) == 2
     assert rows[1].delta == 3
@@ -148,7 +158,12 @@ async def test_find_stock_discrepancies_is_clean_after_normal_activity(
         ),
         idempotency_key=None,
     )
-    await order_service.cancel(order_id=order.id, user_id=user["id"], reason="changed my mind")
+    # AAD-BIZ-006: placed/paid orders are no longer customer-cancellable;
+    # this now goes through the staff cancel path (same `_cancel`).
+    await order_service.update_status(
+        order_id=order.id, new_status=OrderStatus.CANCELLED,
+        note="changed my mind", actor="staff",
+    )
 
     # record_stock_movement only session.add()s (this session has
     # autoflush=False, per conftest.py) — a real caller would normally be
