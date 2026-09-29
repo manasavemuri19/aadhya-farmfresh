@@ -106,7 +106,7 @@ async def _make_staff(session, sub: str) -> str:
         google_sub=sub, email=f"{sub}@example.com", name="Staff"
     )
     await session.execute(
-        sa_update(UserRow).where(UserRow.id == staff["id"]).values(role=Role.STAFF.value)
+        sa_update(UserRow).where(UserRow.id == staff["id"]).values(role=Role.ADMIN.value)
     )
     await session.flush()
     return staff["id"]
@@ -206,7 +206,7 @@ async def seeded_users(engine):
         session.add(
             UserRow(
                 id=staff_id, google_sub="biz005_http_staff", email="staff@example.com",
-                name="Staff", role=Role.STAFF.value,
+                name="Staff", role=Role.ADMIN.value,
             )
         )
         await session.commit()
@@ -225,7 +225,7 @@ async def test_a_plain_customer_cannot_list_tickets(client, seeded_users):
 async def test_staff_can_submit_list_and_close_a_ticket_over_http(client, seeded_users):
     customer_id, staff_id = seeded_users
     customer_token = issue_access_token(customer_id, role="customer")
-    staff_token = issue_access_token(staff_id, role="staff")
+    staff_token = issue_access_token(staff_id, role="admin")
 
     created = await client.post(
         "/v1/support/tickets",
@@ -260,7 +260,7 @@ async def test_staff_can_submit_list_and_close_a_ticket_over_http(client, seeded
 async def test_status_filter_over_http_excludes_the_other_status(client, seeded_users):
     customer_id, staff_id = seeded_users
     customer_token = issue_access_token(customer_id, role="customer")
-    staff_token = issue_access_token(staff_id, role="staff")
+    staff_token = issue_access_token(staff_id, role="admin")
 
     resp = await client.post(
         "/v1/support/tickets", json={"message": "filter me"},

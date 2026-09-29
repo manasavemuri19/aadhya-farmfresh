@@ -57,31 +57,41 @@ async def test_require_staff_trusts_the_database_not_a_stale_token_claim(users, 
     a demotion, or simply forged/stale) must not grant access once the
     database says otherwise."""
     user = await _make_user(users, session, role=Role.CUSTOMER.value)
-    forged_or_stale_principal = Principal(user["id"], role=Role.STAFF.value)
+    forged_or_stale_principal = Principal(user["id"], role=Role.ADMIN.value)
 
     with pytest.raises(Forbidden):
         await require_staff(forged_or_stale_principal, users)
 
 
-async def test_require_staff_grants_access_once_the_database_says_staff(users, session):
+async def test_require_staff_grants_access_once_the_database_says_owner(users, session):
     """The other direction: a token still claiming 'customer' (minted before
-    a promotion) must not block someone the database now says is staff —
+    a promotion) must not block someone the database now says is the owner —
     proving the dependency genuinely re-reads rather than only ever
     tightening access."""
-    user = await _make_user(users, session, role=Role.STAFF.value)
+    user = await _make_user(users, session, role=Role.ADMIN.value)
     stale_customer_principal = Principal(user["id"], role=Role.CUSTOMER.value)
 
     result = await require_staff(stale_customer_principal, users)
 
-    assert result.role == Role.STAFF.value
+    assert result.role == Role.ADMIN.value
 
 
-async def test_require_admin_rejects_staff_that_isnt_admin(users, session):
-    user = await _make_user(users, session, role=Role.STAFF.value)
-    principal = Principal(user["id"], role=Role.STAFF.value)
+# AAD-BIZ-007: the 'staff' role is retired. The database may still hold the
+# string (its CHECK constraint still allows it), but it carries no privileges
+# anywhere — not on the staff-guarded routes, not on the owner-only ones.
+RETIRED_STAFF_ROLE = "staff"
+
+
+async def test_a_retired_staff_role_grants_nothing(users, session):
+    user = await _make_user(users, session, role=RETIRED_STAFF_ROLE)
+    principal = Principal(user["id"], role=RETIRED_STAFF_ROLE)
 
     with pytest.raises(Forbidden):
+        await require_staff(principal, users)
+    with pytest.raises(Forbidden):
         await require_admin(principal, users)
+    with pytest.raises(Forbidden):
+        await require_delivery_agent(principal, users)
 
 
 async def test_require_delivery_agent_rejects_a_customer(users, session):
@@ -95,12 +105,12 @@ async def test_require_delivery_agent_rejects_a_customer(users, session):
 async def test_require_staff_rejects_a_suspended_account_even_with_the_right_role(
     users, session
 ):
-    """A demoted-to-suspended staff account keeps a token that still says
-    'staff' — status is what must stop it, not role."""
+    """A suspended owner account keeps a token that still says 'admin' —
+    status is what must stop it, not role."""
     user = await _make_user(
-        users, session, role=Role.STAFF.value, status=UserStatus.SUSPENDED.value
+        users, session, role=Role.ADMIN.value, status=UserStatus.SUSPENDED.value
     )
-    principal = Principal(user["id"], role=Role.STAFF.value)
+    principal = Principal(user["id"], role=Role.ADMIN.value)
 
     with pytest.raises(Unauthorized):
         await require_staff(principal, users)
@@ -109,7 +119,7 @@ async def test_require_staff_rejects_a_suspended_account_even_with_the_right_rol
 async def test_require_staff_rejects_an_unknown_user_id(users):
     """A token whose subject no longer exists in the database at all — the
     account was deleted after the token was issued."""
-    principal = Principal("usr_does_not_exist", role=Role.STAFF.value)
+    principal = Principal("usr_does_not_exist", role=Role.ADMIN.value)
 
     with pytest.raises(Unauthorized):
         await require_staff(principal, users)

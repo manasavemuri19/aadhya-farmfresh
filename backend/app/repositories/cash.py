@@ -208,3 +208,14 @@ class CashRepository:
             d["orders_settled"] = int(n)
             out.append(d)
         return out
+
+    async def collections_for_orders(self, order_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """order_id -> {agent_id, amount_paise, settlement_id} for whichever
+        of these orders is a delivered COD order with cash on record. Plain
+        read for the owner's order screens; orders with no collection (not
+        COD, or not delivered yet) are simply absent."""
+        if not order_ids:
+            return {}
+        stmt = select(CodCollection).where(CodCollection.order_id.in_(order_ids))
+        rows = (await self.session.execute(stmt)).scalars().all()
+        return {r.order_id: _collection_to_dict(r) for r in rows}

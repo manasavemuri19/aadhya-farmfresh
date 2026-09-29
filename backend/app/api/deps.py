@@ -189,7 +189,15 @@ class Principal:
 
     @property
     def is_staff(self) -> bool:
-        return self.role in {Role.STAFF.value, Role.ADMIN.value}
+        # AAD-BIZ-007: "staff" access now means owner access — there is no
+        # separate staff role. Every route guarded by `StaffUser` (stock,
+        # the order queue, support tickets, reassignment) is therefore
+        # owner-only; an account still carrying the retired 'staff' role in
+        # the database gets nothing (fails closed). The dependency keeps its
+        # name so the ~20 routes and their tests that use it don't churn.
+        # Previous rule:
+        # return self.role in {Role.STAFF.value, Role.ADMIN.value}
+        return self.role == Role.ADMIN.value
 
     @property
     def is_admin(self) -> bool:
@@ -247,7 +255,7 @@ async def require_staff(
 ) -> Principal:
     fresh = await _reauthorize_from_db(principal, users)
     if not fresh.is_staff:
-        raise Forbidden("This area is for farm staff.")
+        raise Forbidden("This area is for the owner account.")
     return fresh
 
 

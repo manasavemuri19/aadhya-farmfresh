@@ -151,24 +151,34 @@ async def test_reauthorize_from_db_rejects_a_suspended_user(session):
         await _reauthorize_from_db(principal, users)
 
 
-async def test_require_staff_accepts_staff_and_admin_refuses_customer(session):
+async def test_require_staff_accepts_the_owner_and_refuses_customer_and_retired_staff(session):
+    """AAD-BIZ-007: the staff guard is owner-only now — there is no staff
+    role. A row still holding the retired 'staff' string is refused."""
     users = UserRepository(session)
-    staff_user = await users.get_or_create_by_google(
-        google_sub="staff_sub", email="staff@example.com", name="Staff",
+    owner = await users.get_or_create_by_google(
+        google_sub="staff_sub", email="staff@example.com", name="Owner",
     )
     await session.execute(
-        sa_update(UserRow).where(UserRow.id == staff_user["id"]).values(role=Role.STAFF.value)
+        sa_update(UserRow).where(UserRow.id == owner["id"]).values(role=Role.ADMIN.value)
+    )
+    retired = await users.get_or_create_by_google(
+        google_sub="retired_staff_sub", email="retired@example.com", name="Retired",
+    )
+    await session.execute(
+        sa_update(UserRow).where(UserRow.id == retired["id"]).values(role="staff")
     )
     customer_user = await users.get_or_create_by_google(
         google_sub="cust_sub", email="cust@example.com", name="Customer",
     )
     await session.flush()
 
-    staff_result = await require_staff(Principal(staff_user["id"], "staff"), users)
-    assert staff_result.is_staff is True
+    owner_result = await require_staff(Principal(owner["id"], "admin"), users)
+    assert owner_result.is_staff is True
 
     with pytest.raises(Forbidden):
         await require_staff(Principal(customer_user["id"], "customer"), users)
+    with pytest.raises(Forbidden):
+        await require_staff(Principal(retired["id"], "staff"), users)
 
 
 async def test_require_admin_refuses_plain_staff(session):
@@ -177,7 +187,7 @@ async def test_require_admin_refuses_plain_staff(session):
         google_sub="staff_only_sub", email="staffonly@example.com", name="Staff",
     )
     await session.execute(
-        sa_update(UserRow).where(UserRow.id == staff_user["id"]).values(role=Role.STAFF.value)
+        sa_update(UserRow).where(UserRow.id == staff_user["id"]).values(role="staff")
     )
     await session.flush()
 
@@ -205,7 +215,7 @@ async def test_require_delivery_agent_refuses_staff(session):
         google_sub="staff_not_agent_sub", email="staffnotagent@example.com", name="Staff",
     )
     await session.execute(
-        sa_update(UserRow).where(UserRow.id == staff_user["id"]).values(role=Role.STAFF.value)
+        sa_update(UserRow).where(UserRow.id == staff_user["id"]).values(role="staff")
     )
     await session.flush()
 

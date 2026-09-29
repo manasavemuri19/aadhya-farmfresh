@@ -38,6 +38,7 @@ from app.schemas.order import (
     RefundPendingView,
     SetAvailabilityRequest,
     SetPriceRequest,
+    StaffOrderView,
     UpdateOrderStatusRequest,
 )
 from app.schemas.support import SupportTicketView
@@ -206,7 +207,7 @@ async def set_availability(
     return {"sku": sku, "is_active": body.active}
 
 
-@router.get("/orders", response_model=Page[OrderView])
+@router.get("/orders", response_model=Page[StaffOrderView])
 async def order_queue(
     staff: StaffUser,
     svc: Orders,
@@ -216,7 +217,11 @@ async def order_queue(
         datetime | None,
         Query(description="AAD-API-004: pass the previous `next_cursor` to walk further in."),
     ] = None,
-) -> Page[OrderView]:
+    newest_first: Annotated[
+        bool,
+        Query(description="History views (delivered/cancelled/refunded): most recent first."),
+    ] = False,
+) -> Page[StaffOrderView]:
     """Oldest first — this is a work queue, not a feed.
 
     AAD-API-004: used to have a hard cap and no cursor, so orders past
@@ -234,11 +239,13 @@ async def order_queue(
         OrderStatus.PACKED,
         OrderStatus.OUT_FOR_DELIVERY,
     ]
-    return await svc.list_queue_for_staff(wanted, limit=limit, after=after)
+    return await svc.list_queue_for_staff(
+        wanted, limit=limit, after=after, newest_first=newest_first
+    )
 
 
-@router.get("/orders/{order_id}", response_model=OrderView)
-async def get_order(order_id: str, staff: StaffUser, svc: Orders) -> OrderView:
+@router.get("/orders/{order_id}", response_model=StaffOrderView)
+async def get_order(order_id: str, staff: StaffUser, svc: Orders) -> StaffOrderView:
     """One order in full, for the owner/staff order screen."""
     return await svc.get_for_staff(order_id)
 

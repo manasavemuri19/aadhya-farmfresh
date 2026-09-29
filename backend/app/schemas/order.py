@@ -229,6 +229,22 @@ class SetPriceRequest(Schema):
         return self
 
 
+class CodCashInfo(Schema):
+    """Where a delivered COD order's cash is right now — shown on the owner's
+    order screens so "delivered" doesn't hide that money is still out."""
+
+    agent_name: str | None
+    amount_paise: int
+    settled: bool
+
+
+class StaffOrderView(OrderView):
+    """What owner/staff get: the customer-facing order, plus (for a delivered
+    COD order) where its cash is."""
+
+    cod_cash: CodCashInfo | None = None
+
+
 class RefundPendingView(Schema):
     """AAD-PAY-021: one refund queued at the gateway but not through yet —
     the owner's "refunds needing attention" list. `stuck` is true once it's

@@ -5,7 +5,11 @@ from enum import StrEnum
 
 class Role(StrEnum):
     CUSTOMER = "customer"
-    STAFF = "staff"       # farm counter: manages stock and fulfils orders
+    # AAD-BIZ-007 (product decision, 2026-09-29): there is no separate "staff"
+    # role — the business is one owner plus delivery agents, so every
+    # privileged action belongs to the owner. Commented out, not deleted, in
+    # case a farm-counter role is wanted later:
+    # STAFF = "staff"     # farm counter: manages stock and fulfils orders
     ADMIN = "admin"       # owner: everything, including refunds
     # Not self-serve — assigned the same way STAFF/ADMIN are (directly on the
     # user row), never chosen at signup. A delivery agent's app is otherwise

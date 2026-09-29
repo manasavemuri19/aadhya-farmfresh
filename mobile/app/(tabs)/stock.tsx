@@ -12,8 +12,9 @@ import { color, font, radius, size, space } from '../../src/theme/tokens';
 import type { AdminProduct, AdminVariant } from '../../src/api/types';
 
 /**
- * Staff-only stock and price editor — this tab only appears in the bar for
- * role === 'staff' | 'admin' (see (tabs)/_layout.tsx). The backend
+ * Owner-only stock and price editor — this tab only appears in the bar for
+ * role === 'admin' (see (tabs)/_layout.tsx; there is no separate staff role
+ * since AAD-BIZ-007). The backend
  * independently enforces the same check on every endpoint here, so this
  * screen being reachable is never itself the security boundary.
  */

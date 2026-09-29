@@ -250,6 +250,7 @@ class OrderRepository:
         *,
         limit: int = 50,
         after: datetime | None = None,
+        newest_first: bool = False,
     ) -> list[dict[str, Any]]:
         """AAD-API-004: this backs the staff work queue. It used to have no
         cursor at all, so a busy morning with more than `limit` open orders
@@ -261,11 +262,19 @@ class OrderRepository:
         stmt = (
             _loaded(select(OrderRow))
             .where(OrderRow.status.in_([s.value for s in statuses]))
-            .order_by(OrderRow.created_at)          # a work queue: oldest first
             .limit(limit + 1)
         )
-        if after:
-            stmt = stmt.where(OrderRow.created_at > after)
+        if newest_first:
+            # The owner's history view (delivered / cancelled / refunded):
+            # most recent first, and `after` becomes "older than this" —
+            # the cursor is still just the last row's created_at either way.
+            stmt = stmt.order_by(OrderRow.created_at.desc())
+            if after:
+                stmt = stmt.where(OrderRow.created_at < after)
+        else:
+            stmt = stmt.order_by(OrderRow.created_at)  # a work queue: oldest first
+            if after:
+                stmt = stmt.where(OrderRow.created_at > after)
         rows = (await self.session.execute(stmt)).scalars().unique().all()
         return [_to_dict(r) for r in rows]
 

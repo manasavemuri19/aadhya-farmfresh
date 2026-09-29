@@ -9,7 +9,27 @@
  */
 
 import { api } from './client';
-import type { OrderView, Page } from './types';
+import type { OrderStatus, OrderView, Page } from './types';
+
+/** Where a delivered COD order's cash is — set only for delivered COD orders. */
+export interface CodCash {
+  agent_name: string | null;
+  amount_paise: number;
+  /** true once the owner has recorded receiving it on the Cash tab. */
+  settled: boolean;
+}
+
+/** An order as owner/staff see it: the customer's view plus COD cash info. */
+export type StaffOrder = OrderView & { cod_cash?: CodCash | null };
+
+/** Which slice of orders a list shows. */
+export type OrderFilter = 'live' | 'delivered' | 'closed';
+
+const FILTER_STATUSES: Record<OrderFilter, OrderStatus[]> = {
+  live: ['confirmed', 'packed', 'out_for_delivery'],
+  delivered: ['delivered'],
+  closed: ['cancelled', 'refunded'],
+};
 
 /** A refund queued at Razorpay that hasn't gone through yet. */
 export interface RefundPending {
@@ -56,15 +76,33 @@ export interface MyCash {
 }
 
 export const ownerApi = {
-  /** Live orders (confirmed → packed → on the way), oldest first. */
-  orderQueue: (after?: string) =>
-    api.get<Page<OrderView>>(`/admin/orders${after ? `?after=${encodeURIComponent(after)}` : ''}`),
-  order: (id: string) => api.get<OrderView>(`/admin/orders/${id}`),
+  /**
+   * Live orders come oldest-first (a work queue); delivered / cancelled /
+   * refunded come newest-first (history), 50 at a time.
+   */
+  orderList: (filter: OrderFilter, after?: string) => {
+    const params = FILTER_STATUSES[filter].map((s) => `status=${s}`);
+    if (filter !== 'live') params.push('newest_first=true');
+    if (after) params.push(`after=${encodeURIComponent(after)}`);
+    return api.get<Page<StaffOrder>>(`/admin/orders?${params.join('&')}`);
+  },
+  order: (id: string) => api.get<StaffOrder>(`/admin/orders/${id}`),
   /** Owner-only. For a paid online order this also queues the full refund. */
   cancelOrder: (id: string, reason: string) =>
     api.post<OrderView>(
       `/admin/orders/${id}/status`,
       { status: 'cancelled', note: reason },
+      { auth: true },
+    ),
+  /**
+   * Owner-only. A goodwill refund on an order that's already been delivered
+   * (spoiled milk, wrong item). Queues the full refund to the customer's
+   * original payment method; nothing goes back on the shelf.
+   */
+  refundOrder: (id: string, reason: string) =>
+    api.post<OrderView>(
+      `/admin/orders/${id}/status`,
+      { status: 'refunded', note: reason },
       { auth: true },
     ),
   refundsPending: () => api.get<RefundPending[]>('/admin/refunds/pending'),

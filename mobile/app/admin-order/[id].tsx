@@ -6,12 +6,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Text } from '../../src/components/Text';
 import { Button } from '../../src/components/Button';
 import { ErrorState, Loading } from '../../src/components/Feedback';
-import { ownerApi } from '../../src/api/owner';
+import { ownerApi, type StaffOrder } from '../../src/api/owner';
 import { useSession } from '../../src/store/session';
 import { formatPaise } from '../../src/lib/money';
 import { shortDateTime } from '../../src/lib/time';
 import { color, font, radius, size, space } from '../../src/theme/tokens';
-import type { OrderStatus, OrderView } from '../../src/api/types';
+import type { OrderStatus } from '../../src/api/types';
 export { AppErrorFallback as ErrorBoundary } from '../../src/components/ErrorBoundary';
 
 const STATUS_TITLE: Record<OrderStatus, string> = {
@@ -27,12 +27,20 @@ const STATUS_TITLE: Record<OrderStatus, string> = {
 const CANCELLABLE: OrderStatus[] = ['pending_payment', 'confirmed', 'packed', 'out_for_delivery'];
 
 /**
- * AAD-BIZ-006: one order, as the owner/staff see it. Customers can no longer
+ * AAD-BIZ-006: one order, as the owner sees it. Customers can no longer
  * cancel from their app, so this is where an order gets cancelled — owner
- * only (the backend refuses staff; the button just isn't shown to them).
- * Cancelling a paid online order queues the full refund automatically; the
- * backend's sweep sends it to Razorpay within a couple of minutes, and
- * alerts the owner if it's still stuck after 30 (AAD-PAY-021).
+ * only (AAD-BIZ-007: there is no staff role; the backend refuses everyone
+ * else regardless of what this screen shows).
+ *
+ *  - Before delivery: "Cancel & refund" (paid online → full refund is queued)
+ *    or "Cancel order" (COD / not yet paid — no money to send back).
+ *  - After delivery: "Refund" for a paid online order (spoiled milk, wrong
+ *    item) — nothing goes back on the shelf. A delivered COD order instead
+ *    shows where its cash is; refunding cash is done in person, outside the
+ *    app.
+ *
+ * The backend's sweep sends refunds to Razorpay within a couple of minutes,
+ * and alerts the owner if one is still stuck after 30 (AAD-PAY-021).
  */
 export default function AdminOrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -49,11 +57,13 @@ export default function AdminOrderScreen() {
   });
 
   const cancel = useMutation({
-    mutationFn: () => ownerApi.cancelOrder(id, reason.trim()),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['owner', 'order', id], updated);
+    mutationFn: (mode: 'cancel' | 'refund') =>
+      mode === 'refund' ? ownerApi.refundOrder(id, reason.trim()) : ownerApi.cancelOrder(id, reason.trim()),
+    onSuccess: () => {
       setShowCancel(false);
       setReason('');
+      // Refetch rather than patch: the status route's response is the plain
+      // order, without the COD cash info this screen also shows.
       void queryClient.invalidateQueries({ queryKey: ['owner'] });
       void queryClient.invalidateQueries({ queryKey: ['orders'] });
     },
@@ -62,21 +72,37 @@ export default function AdminOrderScreen() {
   if (order.isPending) return <Loading />;
   if (order.isError) return <ErrorState error={order.error} onRetry={() => void order.refetch()} />;
 
-  const data: OrderView = order.data;
+  const data: StaffOrder = order.data;
   const paidOnline = data.payment.method === 'online' && data.payment.status === 'captured';
+  const isDelivered = data.status === 'delivered';
+  // Pre-delivery: cancel (with a refund attached when it was paid online).
+  // Post-delivery: refund — only where there's online money to send back.
   const canCancel = isAdmin && CANCELLABLE.includes(data.status);
-  const cancelLabel = paidOnline ? `Cancel & refund ${formatPaise(data.total_paise)}` : 'Cancel order';
+  const canRefundDelivered = isAdmin && isDelivered && paidOnline;
+  const canAct = canCancel || canRefundDelivered;
+  const actionLabel = canRefundDelivered
+    ? `Refund ${formatPaise(data.total_paise)}`
+    : paidOnline
+      ? `Cancel & refund ${formatPaise(data.total_paise)}`
+      : 'Cancel order';
+  const cancelLabel = actionLabel;
 
   const confirmCancel = () => {
     if (!reason.trim()) return;
     Alert.alert(
-      paidOnline ? 'Cancel and refund?' : 'Cancel this order?',
-      paidOnline
-        ? `Order #${data.order_number} will be cancelled and ${formatPaise(data.total_paise)} refunded to the customer's original payment method. This can't be undone.`
-        : `Order #${data.order_number} will be cancelled. This can't be undone.`,
+      canRefundDelivered ? 'Refund this order?' : paidOnline ? 'Cancel and refund?' : 'Cancel this order?',
+      canRefundDelivered
+        ? `${formatPaise(data.total_paise)} will be refunded to the customer's original payment method for order #${data.order_number}. This can't be undone.`
+        : paidOnline
+          ? `Order #${data.order_number} will be cancelled and ${formatPaise(data.total_paise)} refunded to the customer's original payment method. This can't be undone.`
+          : `Order #${data.order_number} will be cancelled. This can't be undone.`,
       [
         { text: 'Keep order', style: 'cancel' },
-        { text: paidOnline ? 'Cancel & refund' : 'Cancel order', style: 'destructive', onPress: () => cancel.mutate() },
+        {
+          text: canRefundDelivered ? 'Refund' : paidOnline ? 'Cancel & refund' : 'Cancel order',
+          style: 'destructive',
+          onPress: () => cancel.mutate(canRefundDelivered ? 'refund' : 'cancel'),
+        },
       ],
     );
   };
@@ -122,20 +148,59 @@ export default function AdminOrderScreen() {
         {data.notes ? <Text variant="caption" style={styles.notes}>Note: {data.notes}</Text> : null}
       </View>
 
-      {canCancel && !showCancel && (
-        <Button label={cancelLabel} variant="secondary" onPress={() => setShowCancel(true)} />
+      {data.cod_cash && (
+        <View style={styles.card}>
+          <Text variant="label" style={styles.cardTitle}>Cash on delivery</Text>
+          <Text
+            variant="body"
+            style={data.cod_cash.settled ? styles.good : styles.warn}
+          >
+            {data.cod_cash.settled
+              ? `${formatPaise(data.cod_cash.amount_paise)} received from ${data.cod_cash.agent_name ?? 'the delivery partner'}.`
+              : `${formatPaise(data.cod_cash.amount_paise)} collected by ${data.cod_cash.agent_name ?? 'the delivery partner'} — not handed over yet.`}
+          </Text>
+          <Text variant="caption">
+            {data.cod_cash.settled
+              ? 'Settled on the Cash tab.'
+              : 'Mark it received on the Cash tab once they hand it to you.'}
+          </Text>
+        </View>
       )}
 
-      {canCancel && showCancel && (
+      {/* AAD-BIZ-007: the "only available on the owner account" hint that
+          used to sit here is gone with the staff role.
+      {!isAdmin && (data.status === 'delivered' || CANCELLABLE.includes(data.status)) && (
+        <Text variant="caption" style={styles.roleNote}>
+          Cancel &amp; refund is only available on the owner account.
+        </Text>
+      )}
+      */}
+
+      {isAdmin && isDelivered && !paidOnline && data.payment.method === 'cod' && (
+        <Text variant="caption" style={styles.roleNote}>
+          Cash on delivery orders are refunded in cash, in person — there's nothing to send back
+          through Razorpay.
+        </Text>
+      )}
+
+      {canAct && !showCancel && (
+        <Button label={actionLabel} variant="secondary" onPress={() => setShowCancel(true)} />
+      )}
+
+      {canAct && showCancel && (
         <View style={styles.card}>
           <Text variant="label" style={styles.cardTitle}>{cancelLabel}</Text>
           <Text variant="caption">
-            Why is this order being cancelled? This is saved on the order.
+            {canRefundDelivered
+              ? 'Why is this order being refunded? This is saved on the order.'
+              : 'Why is this order being cancelled? This is saved on the order.'}
           </Text>
           <TextInput
             value={reason}
             onChangeText={setReason}
-            placeholder="e.g. Out of stock, customer called to cancel"
+            placeholder={
+              canRefundDelivered ? 'e.g. Milk arrived spoiled' : 'e.g. Out of stock, customer called to cancel'
+            }
             maxLength={200}
             style={styles.input}
             placeholderTextColor={color.muted}
@@ -166,7 +231,7 @@ export default function AdminOrderScreen() {
   );
 }
 
-function PaymentLine({ order }: { order: OrderView }) {
+function PaymentLine({ order }: { order: StaffOrder }) {
   const status = order.payment.status as string;
   const amount = formatPaise(order.payment.amount_paise);
   if (order.payment.method === 'cod') {
@@ -216,6 +281,7 @@ const styles = StyleSheet.create({
     color: color.ink,
   },
   error: { fontFamily: font.bodyMedium, fontSize: size.sm, color: color.discount },
+  roleNote: { color: color.muted },
   warn: { color: color.lowStock, fontFamily: font.bodyMedium },
   good: { color: color.leaf, fontFamily: font.bodyMedium },
 });

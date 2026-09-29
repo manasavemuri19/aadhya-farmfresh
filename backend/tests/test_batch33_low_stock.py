@@ -215,7 +215,7 @@ async def _make_staff(session, sub: str) -> str:
         google_sub=sub, email=f"{sub}@example.com", name="Staff"
     )
     await session.execute(
-        update(UserRow).where(UserRow.id == staff["id"]).values(role=Role.STAFF.value)
+        update(UserRow).where(UserRow.id == staff["id"]).values(role=Role.ADMIN.value)
     )
     await session.flush()
     return staff["id"]

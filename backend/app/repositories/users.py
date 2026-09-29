@@ -485,10 +485,13 @@ class UserRepository:
         `staff` and `admin`, the same two roles `Principal.is_staff` accepts
         (an owner account is still staff for this purpose). Used only to fan
         out a "new support ticket" push the same way
-        `list_delivery_agent_ids` fans out a "new order" one."""
-        stmt = select(UserRow.id).where(
-            UserRow.role.in_([Role.STAFF.value, Role.ADMIN.value])
-        )
+        `list_delivery_agent_ids` fans out a "new order" one.
+
+        AAD-BIZ-007: there is no staff role any more, so this is just the
+        owner account(s) — same as `list_admin_ids` below; the name stays so
+        the support-ticket and low-stock callers don't churn. Previous rule:
+        `UserRow.role.in_([Role.STAFF.value, Role.ADMIN.value])`."""
+        stmt = select(UserRow.id).where(UserRow.role == Role.ADMIN.value)
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_admin_ids(self) -> list[str]:

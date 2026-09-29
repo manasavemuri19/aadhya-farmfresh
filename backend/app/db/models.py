@@ -84,6 +84,11 @@ class User(Base, TimestampMixin):
         # manual psql fix or a future write path can never silently grant
         # (or fail to recognise) a privileged role.
         CheckConstraint(
+            # AAD-BIZ-007: 'staff' is retired in the app (no privileges, not
+            # in the Role enum) but deliberately still *allowed* here —
+            # tightening this constraint in a migration would fail the
+            # deploy outright while any row still holds that value. Drop it
+            # in a later migration once the table is confirmed clean.
             "role IN ('customer', 'staff', 'admin', 'delivery_agent')",
             name="ck_user_role_valid",
         ),
